@@ -1,0 +1,26 @@
+[package]
+name = "vistio-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Command-line interface for Vistio simulation, benchmarking, and debugging."
+
+[[bin]]
+name = "vistio"
+path = "src/main.rs"
+
+[dependencies]
+vistio-types = { path = "../vistio-types" }
+vistio-mesh = { path = "../vistio-mesh" }
+vistio-material = { path = "../vistio-material" }
+vistio-io = { path = "../vistio-io" }
+vistio-solver = { path = "../vistio-solver" }
+vistio-contact = { path = "../vistio-contact" }
+vistio-bench = { path = "../vistio-bench" }
+vistio-render = { path = "../vistio-render" }
+vistio-debug = { path = "../vistio-debug" }
+vistio-telemetry = { path = "../vistio-telemetry" }
+clap = { workspace = true }
+toml = { workspace = true }
+serde_json = { workspace = true }
