@@ -43,3 +43,6 @@ tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 
 # Testing
 approx = "0.5"
+
+# Sparse linear algebra
+faer = "0.24"

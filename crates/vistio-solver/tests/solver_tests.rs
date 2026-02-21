@@ -52,8 +52,8 @@ fn state_predict() {
     // After prediction with zero initial velocity:
     // pred_y = pos_y + dt*0 + dt²*(-9.81)
     let dt2g = dt * dt * (-9.81);
-    for i in 0..n {
-        let expected = initial_y[i] + dt2g;
+    for (i, &initial) in initial_y.iter().enumerate().take(n) {
+        let expected = initial + dt2g;
         assert!(
             (state.pred_y[i] - expected).abs() < 1e-5,
             "Vertex {}: pred_y={}, expected={}",
@@ -193,11 +193,11 @@ fn pd_stub_gravity_motion() {
     }
 
     // All unpinned vertices should have moved down (gravity -Y)
-    for i in 0..n {
+    for (i, &initial) in initial_y.iter().enumerate().take(n) {
         assert!(
-            state.pos_y[i] < initial_y[i],
+            state.pos_y[i] < initial,
             "Vertex {} should have fallen: y={} vs initial={}",
-            i, state.pos_y[i], initial_y[i]
+            i, state.pos_y[i], initial
         );
     }
 }
@@ -238,4 +238,312 @@ fn pd_stub_not_initialized_error() {
     let mut solver = ProjectiveDynamicsStub::new();
     // Don't call init()
     assert!(solver.step(&mut state, 1.0 / 60.0).is_err());
+}
+
+// ─── FEM Element Tests ────────────────────────────────────────
+
+use vistio_solver::element::ElementData;
+
+#[test]
+fn element_from_mesh_count() {
+    let mesh = quad_grid(4, 4, 1.0, 1.0);
+    let elements = ElementData::from_mesh(&mesh, 100.0);
+    assert_eq!(elements.len(), mesh.triangle_count());
+    assert!(!elements.is_empty());
+}
+
+#[test]
+fn element_rest_area_positive() {
+    let mesh = quad_grid(2, 2, 1.0, 1.0);
+    let elements = ElementData::from_mesh(&mesh, 100.0);
+    for elem in &elements.elements {
+        assert!(
+            elem.rest_area > 0.0,
+            "Rest area should be positive, got {}",
+            elem.rest_area
+        );
+    }
+}
+
+#[test]
+fn element_dm_inv_finite() {
+    let mesh = quad_grid(3, 3, 1.0, 1.0);
+    let elements = ElementData::from_mesh(&mesh, 100.0);
+    for elem in &elements.elements {
+        for &v in &elem.dm_inv {
+            assert!(v.is_finite(), "Dm_inv should be finite");
+        }
+    }
+}
+
+#[test]
+fn element_weight_equals_stiffness_times_area() {
+    let mesh = quad_grid(2, 2, 1.0, 1.0);
+    let stiffness = 42.0;
+    let elements = ElementData::from_mesh(&mesh, stiffness);
+    for elem in &elements.elements {
+        let expected = stiffness * elem.rest_area;
+        assert!(
+            (elem.weight - expected).abs() < 1e-6,
+            "weight={}, expected={}",
+            elem.weight,
+            expected
+        );
+    }
+}
+
+#[test]
+fn element_projection_undeformed_returns_near_original() {
+    // When the mesh hasn't been deformed, projection should return
+    // positions very close to the original (rotation = identity).
+    let mesh = quad_grid(2, 2, 1.0, 1.0);
+    let elements = ElementData::from_mesh(&mesh, 100.0);
+
+    for elem in &elements.elements {
+        let (p0, p1, p2) = elements.project(elem, &mesh.pos_x, &mesh.pos_y, &mesh.pos_z);
+
+        let [i0, i1, i2] = elem.indices;
+        let orig0 = vistio_math::Vec3::new(mesh.pos_x[i0], mesh.pos_y[i0], mesh.pos_z[i0]);
+        let orig1 = vistio_math::Vec3::new(mesh.pos_x[i1], mesh.pos_y[i1], mesh.pos_z[i1]);
+        let orig2 = vistio_math::Vec3::new(mesh.pos_x[i2], mesh.pos_y[i2], mesh.pos_z[i2]);
+
+        assert!(
+            (p0 - orig0).length() < 0.1,
+            "p0 projection drifted: {:?} vs {:?}",
+            p0, orig0
+        );
+        assert!(
+            (p1 - orig1).length() < 0.1,
+            "p1 projection drifted: {:?} vs {:?}",
+            p1, orig1
+        );
+        assert!(
+            (p2 - orig2).length() < 0.1,
+            "p2 projection drifted: {:?} vs {:?}",
+            p2, orig2
+        );
+    }
+}
+
+// ─── Assembly Tests ───────────────────────────────────────────
+
+use vistio_solver::assembly::assemble_system_matrix;
+
+#[test]
+fn assembly_matrix_is_square_n() {
+    let mesh = quad_grid(4, 4, 1.0, 1.0);
+    let n = mesh.vertex_count();
+    let elements = ElementData::from_mesh(&mesh, 100.0);
+    let mass = vec![0.01_f32; n];
+    let dt = 1.0 / 60.0;
+
+    let matrix = assemble_system_matrix(n, &mass, dt, &elements);
+    assert_eq!(matrix.rows, n);
+    assert_eq!(matrix.cols, n);
+}
+
+#[test]
+fn assembly_diagonal_positive() {
+    // For SPD, all diagonal entries must be positive
+    let mesh = quad_grid(3, 3, 1.0, 1.0);
+    let n = mesh.vertex_count();
+    let elements = ElementData::from_mesh(&mesh, 100.0);
+    let mass = vec![0.01_f32; n];
+    let dt = 1.0 / 60.0;
+
+    let matrix = assemble_system_matrix(n, &mass, dt, &elements);
+
+    for i in 0..n {
+        let mut diag = 0.0_f32;
+        for idx in matrix.row_ptr[i]..matrix.row_ptr[i + 1] {
+            if matrix.col_idx[idx] == i {
+                diag = matrix.values[idx];
+            }
+        }
+        assert!(
+            diag > 0.0,
+            "Diagonal[{i}] = {diag}, should be positive"
+        );
+    }
+}
+
+#[test]
+fn assembly_rhs_length() {
+    use vistio_solver::assembly::assemble_rhs;
+    let mesh = quad_grid(2, 2, 1.0, 1.0);
+    let n = mesh.vertex_count();
+    let elements = ElementData::from_mesh(&mesh, 100.0);
+    let mass = vec![0.01_f32; n];
+    let dt = 1.0 / 60.0;
+    let pred = vec![0.0_f32; n];
+    let proj = vec![(0.0_f32, 0.0, 0.0); elements.len()];
+
+    let rhs = assemble_rhs(n, &mass, dt, &pred, &proj, &elements, 0);
+    assert_eq!(rhs.len(), n);
+}
+
+// ─── PD Solver Tests ──────────────────────────────────────────
+
+use vistio_solver::pd_solver::ProjectiveDynamicsSolver;
+
+#[test]
+fn pd_solver_init_succeeds() {
+    let mesh = quad_grid(4, 4, 1.0, 1.0);
+    let topo = Topology::build(&mesh);
+    let config = SolverConfig::default();
+
+    let mut solver = ProjectiveDynamicsSolver::new();
+    solver.init(&mesh, &topo, &config).unwrap();
+    assert_eq!(solver.name(), "ProjectiveDynamics");
+}
+
+#[test]
+fn pd_solver_single_step_runs() {
+    let mesh = quad_grid(4, 4, 1.0, 1.0);
+    let topo = Topology::build(&mesh);
+    let n = mesh.vertex_count();
+    let pinned = vec![false; n];
+    let mut state = SimulationState::from_mesh(&mesh, 0.01, &pinned).unwrap();
+    let config = SolverConfig::debug(); // 3 iterations max
+
+    let mut solver = ProjectiveDynamicsSolver::new();
+    solver.init(&mesh, &topo, &config).unwrap();
+
+    let result = solver.step(&mut state, 1.0 / 60.0).unwrap();
+    assert!(result.iterations > 0, "PD solver should run at least 1 iteration");
+    assert!(result.wall_time >= 0.0);
+}
+
+#[test]
+fn pd_solver_pinned_vertices_stay() {
+    let mesh = quad_grid(4, 4, 1.0, 1.0);
+    let topo = Topology::build(&mesh);
+    let n = mesh.vertex_count();
+    let mut pinned = vec![false; n];
+    pinned[0] = true;
+    pinned[4] = true;
+
+    let mut state = SimulationState::from_mesh(&mesh, 0.01, &pinned).unwrap();
+    let config = SolverConfig::debug();
+
+    let pin0_y = state.pos_y[0];
+    let pin4_y = state.pos_y[4];
+
+    let mut solver = ProjectiveDynamicsSolver::new();
+    solver.init(&mesh, &topo, &config).unwrap();
+
+    for _ in 0..5 {
+        solver.step(&mut state, 1.0 / 60.0).unwrap();
+    }
+
+    assert!(
+        (state.pos_y[0] - pin0_y).abs() < 1e-6,
+        "Pinned vertex 0 moved: {} vs {}",
+        state.pos_y[0], pin0_y
+    );
+    assert!(
+        (state.pos_y[4] - pin4_y).abs() < 1e-6,
+        "Pinned vertex 4 moved: {} vs {}",
+        state.pos_y[4], pin4_y
+    );
+}
+
+#[test]
+fn pd_solver_gravity_pulls_down() {
+    let mesh = quad_grid(3, 3, 1.0, 1.0);
+    let topo = Topology::build(&mesh);
+    let n = mesh.vertex_count();
+    let pinned = vec![false; n];
+    let mut state = SimulationState::from_mesh(&mesh, 0.01, &pinned).unwrap();
+    let config = SolverConfig::debug();
+
+    // Track centroid Y (average Y of all vertices)
+    let initial_centroid_y: f32 = state.pos_y.iter().sum::<f32>() / n as f32;
+
+    let mut solver = ProjectiveDynamicsSolver::new();
+    solver.init(&mesh, &topo, &config).unwrap();
+
+    for _ in 0..10 {
+        solver.step(&mut state, 1.0 / 60.0).unwrap();
+    }
+
+    // The centroid should have moved downward under gravity.
+    // Individual vertices may move in various directions due to elastic forces,
+    // but the center of mass must fall.
+    let final_centroid_y: f32 = state.pos_y.iter().sum::<f32>() / n as f32;
+    assert!(
+        final_centroid_y < initial_centroid_y,
+        "Centroid should have fallen: y={final_centroid_y} vs initial={initial_centroid_y}"
+    );
+}
+
+// ─── Bending Tests ────────────────────────────────────────────
+
+use vistio_solver::bending::{BendingData, compute_dihedral_angle};
+
+#[test]
+fn bending_element_count_matches_interior_edges() {
+    let mesh = quad_grid(4, 4, 1.0, 1.0);
+    let topo = Topology::build(&mesh);
+    let bending = BendingData::from_topology(&mesh, &topo, 1.0);
+    assert_eq!(bending.len(), topo.interior_edges.len());
+}
+
+#[test]
+fn bending_rest_angle_flat_mesh() {
+    // A flat quad grid should have rest dihedral angles near π (coplanar triangles)
+    let mesh = quad_grid(3, 3, 1.0, 1.0);
+    let topo = Topology::build(&mesh);
+    let bending = BendingData::from_topology(&mesh, &topo, 1.0);
+
+    for elem in &bending.elements {
+        assert!(
+            elem.rest_angle.is_finite(),
+            "Rest angle should be finite"
+        );
+        // For a flat mesh, dihedral angle should be near π
+        assert!(
+            (elem.rest_angle - std::f32::consts::PI).abs() < 0.5,
+            "Flat mesh rest angle should be near π, got {}",
+            elem.rest_angle
+        );
+    }
+}
+
+#[test]
+fn bending_dihedral_angle_coplanar() {
+    // Two coplanar triangles: angle should be π
+    let v0 = vistio_math::Vec3::new(0.0, 0.0, 0.0);
+    let v1 = vistio_math::Vec3::new(1.0, 0.0, 0.0);
+    let wa = vistio_math::Vec3::new(0.5, 1.0, 0.0);
+    let wb = vistio_math::Vec3::new(0.5, -1.0, 0.0);
+
+    let angle = compute_dihedral_angle(v0, v1, wa, wb);
+    assert!(
+        (angle - std::f32::consts::PI).abs() < 0.1,
+        "Coplanar dihedral should be ≈ π, got {angle}"
+    );
+}
+
+#[test]
+fn bending_projection_preserves_edge_vertices() {
+    let mesh = quad_grid(3, 3, 1.0, 1.0);
+    let topo = Topology::build(&mesh);
+    let bending = BendingData::from_topology(&mesh, &topo, 1.0);
+
+    if !bending.is_empty() {
+        let elem = &bending.elements[0];
+        let (p_v0, p_v1, _, _) = bending.project(elem, &mesh.pos_x, &mesh.pos_y, &mesh.pos_z);
+
+        // Edge vertices should not change during bending projection
+        let orig_v0 = vistio_math::Vec3::new(
+            mesh.pos_x[elem.v0], mesh.pos_y[elem.v0], mesh.pos_z[elem.v0]
+        );
+        let orig_v1 = vistio_math::Vec3::new(
+            mesh.pos_x[elem.v1], mesh.pos_y[elem.v1], mesh.pos_z[elem.v1]
+        );
+
+        assert!((p_v0 - orig_v0).length() < 1e-6, "v0 should not move");
+        assert!((p_v1 - orig_v1).length() < 1e-6, "v1 should not move");
+    }
 }

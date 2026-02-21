@@ -10,6 +10,7 @@ description = "Linear algebra primitives, decompositions, and sparse matrix oper
 vistio-types = { path = "../vistio-types" }
 glam = { workspace = true }
 serde = { workspace = true }
+faer = { workspace = true }
 
 [dev-dependencies]
 approx = { workspace = true }

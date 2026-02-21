@@ -158,8 +158,8 @@ fn topology_single_quad() {
 fn topology_2x2_grid() {
     let mesh = quad_grid(2, 2, 1.0, 1.0);
     let topo = Topology::build(&mesh);
-    assert!(topo.edges.len() > 0);
-    assert!(topo.interior_edges.len() > 0);
+    assert!(!topo.edges.is_empty());
+    assert!(!topo.interior_edges.is_empty());
     assert!(!topo.is_closed());
 }
 

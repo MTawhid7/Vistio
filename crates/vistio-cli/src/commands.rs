@@ -4,7 +4,7 @@ use vistio_bench::metrics::BenchmarkMetrics;
 use vistio_bench::runner::BenchmarkRunner;
 use vistio_bench::scenarios::{Scenario, ScenarioKind};
 use vistio_debug::snapshot::StateSnapshot;
-use vistio_solver::pd_stub::ProjectiveDynamicsStub;
+use vistio_solver::pd_solver::ProjectiveDynamicsSolver;
 
 /// Run a simulation from config file.
 pub fn simulate(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -43,7 +43,7 @@ pub fn benchmark(
     };
 
     let mut all_metrics = Vec::new();
-    let mut solver = ProjectiveDynamicsStub::new();
+    let mut solver = ProjectiveDynamicsSolver::new();
 
     for &kind in &scenarios {
         let scenario = Scenario::from_kind(kind);

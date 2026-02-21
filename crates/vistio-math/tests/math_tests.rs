@@ -105,3 +105,169 @@ fn csr_from_triplets_unordered() {
     assert_eq!(m.col_idx, vec![0, 1, 2]);
     assert_eq!(m.values, vec![1.0, 2.0, 3.0]);
 }
+
+// ─── FaerSolver Tests ────────────────────────────────────────
+
+use vistio_math::faer_solver::FaerSolver;
+use vistio_math::sparse::SparseSolver;
+
+#[test]
+fn faer_identity_solve() {
+    // Solve I * x = b → expect x = b
+    let triplets = vec![(0, 0, 1.0), (1, 1, 1.0), (2, 2, 1.0)];
+    let matrix = CsrMatrix::from_triplets(3, 3, &triplets);
+
+    let mut solver = FaerSolver::new();
+    assert!(!solver.is_factorized());
+
+    solver.factorize(&matrix).unwrap();
+    assert!(solver.is_factorized());
+
+    let rhs = [3.0_f32, 7.0, -2.0];
+    let mut sol = [0.0_f32; 3];
+    solver.solve(&rhs, &mut sol).unwrap();
+
+    for i in 0..3 {
+        assert!(
+            (sol[i] - rhs[i]).abs() < 1e-5,
+            "sol[{i}] = {}, expected {}",
+            sol[i],
+            rhs[i]
+        );
+    }
+}
+
+#[test]
+fn faer_spd_matrix_solve() {
+    // Solve a known 3×3 SPD system:
+    //   [4 1 0]       [1]
+    //   [1 3 1] * x = [2]
+    //   [0 1 2]       [3]
+    //
+    // Solution (via manual calculation):
+    //   x ≈ [0.0, 1.0, 1.0]  (verify by substitution: 4*0+1*1+0*1=1, 1*0+3*1+1*1=4... not exact)
+    // Let's use a simpler approach: verify A*x_computed ≈ b
+    let triplets = vec![
+        (0, 0, 4.0),
+        (0, 1, 1.0),
+        (1, 0, 1.0),
+        (1, 1, 3.0),
+        (1, 2, 1.0),
+        (2, 1, 1.0),
+        (2, 2, 2.0),
+    ];
+    let matrix = CsrMatrix::from_triplets(3, 3, &triplets);
+
+    let mut solver = FaerSolver::new();
+    solver.factorize(&matrix).unwrap();
+
+    let rhs = [1.0_f32, 2.0, 3.0];
+    let mut sol = [0.0_f32; 3];
+    solver.solve(&rhs, &mut sol).unwrap();
+
+    // Verify: A * sol ≈ rhs
+    let residual = [
+        4.0 * sol[0] + 1.0 * sol[1] + 0.0 * sol[2] - rhs[0],
+        1.0 * sol[0] + 3.0 * sol[1] + 1.0 * sol[2] - rhs[1],
+        0.0 * sol[0] + 1.0 * sol[1] + 2.0 * sol[2] - rhs[2],
+    ];
+    for (i, &r) in residual.iter().enumerate() {
+        assert!(
+            r.abs() < 1e-4,
+            "Residual[{i}] = {r}, expected ~0"
+        );
+    }
+}
+
+#[test]
+fn faer_factorize_then_multi_solve() {
+    // Factorize once, solve with two different RHS
+    let triplets = vec![(0, 0, 2.0), (1, 1, 3.0), (2, 2, 5.0)];
+    let matrix = CsrMatrix::from_triplets(3, 3, &triplets);
+
+    let mut solver = FaerSolver::new();
+    solver.factorize(&matrix).unwrap();
+
+    // First solve
+    let rhs1 = [4.0_f32, 9.0, 25.0];
+    let mut sol1 = [0.0_f32; 3];
+    solver.solve(&rhs1, &mut sol1).unwrap();
+    assert!((sol1[0] - 2.0).abs() < 1e-5);
+    assert!((sol1[1] - 3.0).abs() < 1e-5);
+    assert!((sol1[2] - 5.0).abs() < 1e-5);
+
+    // Second solve with different RHS (same factorization)
+    let rhs2 = [1.0_f32, 1.0, 1.0];
+    let mut sol2 = [0.0_f32; 3];
+    solver.solve(&rhs2, &mut sol2).unwrap();
+    assert!((sol2[0] - 0.5).abs() < 1e-5);
+    assert!((sol2[1] - 1.0 / 3.0).abs() < 1e-5);
+    assert!((sol2[2] - 0.2).abs() < 1e-5);
+}
+
+#[test]
+fn faer_large_laplacian() {
+    // Build a 100×100 graph Laplacian (tridiagonal: 2 on diagonal, -1 on off-diagonals)
+    // plus a small diagonal shift for strict positive-definiteness.
+    let n = 100;
+    let mut triplets = Vec::new();
+
+    for i in 0..n {
+        triplets.push((i, i, 2.1_f32)); // Diagonal (2 + 0.1 shift for SPD)
+        if i > 0 {
+            triplets.push((i, i - 1, -1.0));
+        }
+        if i < n - 1 {
+            triplets.push((i, i + 1, -1.0));
+        }
+    }
+
+    let matrix = CsrMatrix::from_triplets(n, n, &triplets);
+    let mut solver = FaerSolver::new();
+    solver.factorize(&matrix).unwrap();
+
+    // RHS: all ones
+    let rhs = vec![1.0_f32; n];
+    let mut sol = vec![0.0_f32; n];
+    solver.solve(&rhs, &mut sol).unwrap();
+
+    // Verify residual: ||A*x - b|| < tolerance
+    let mut max_residual: f32 = 0.0;
+    for i in 0..n {
+        let mut ax_i = 2.1 * sol[i];
+        if i > 0 {
+            ax_i -= sol[i - 1];
+        }
+        if i < n - 1 {
+            ax_i -= sol[i + 1];
+        }
+        max_residual = max_residual.max((ax_i - rhs[i]).abs());
+    }
+    assert!(
+        max_residual < 1e-3,
+        "Max residual = {max_residual}, expected < 1e-3"
+    );
+}
+
+#[test]
+fn faer_solve_before_factorize_fails() {
+    let solver = FaerSolver::new();
+    let rhs = [1.0_f32; 3];
+    let mut sol = [0.0_f32; 3];
+    assert!(solver.solve(&rhs, &mut sol).is_err());
+}
+
+#[test]
+fn faer_non_square_fails() {
+    let triplets = vec![(0, 0, 1.0)];
+    let matrix = CsrMatrix::from_triplets(2, 3, &triplets);
+    let mut solver = FaerSolver::new();
+    assert!(solver.factorize(&matrix).is_err());
+}
+
+#[test]
+fn faer_empty_matrix_fails() {
+    let matrix = CsrMatrix::new(0, 0);
+    let mut solver = FaerSolver::new();
+    assert!(solver.factorize(&matrix).is_err());
+}

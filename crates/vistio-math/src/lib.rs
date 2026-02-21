@@ -9,6 +9,7 @@
 //! - Sparse matrix representation (CSR) and Cholesky solver interface
 
 pub mod decomposition;
+pub mod faer_solver;
 pub mod mat3x2;
 pub mod sparse;
 

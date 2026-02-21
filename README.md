@@ -11,6 +11,7 @@ Built in Rust with a modular crate architecture, Vistio targets production-grade
 ## Status
 
 ✅ **Tier 0 — Foundation & Interface Contract** — Complete
+✅ **Tier 1 — Projective Dynamics Solver** — Complete
 
 | Gate | Result |
 | --- | --- |
@@ -25,8 +26,8 @@ Built in Rust with a modular crate architecture, Vistio targets production-grade
 - **Linear algebra** — 3×2 deformation gradients, polar decomposition, CSR sparse matrices
 - **Mesh system** — SoA TriangleMesh, procedural generators (quad grid, UV sphere), topology queries, vertex normals
 - **Materials** — ConstitutiveModel trait, FabricProperties (KES-mapped), 5 built-in presets
-- **Solver** — SolverStrategy trait, SimulationState (SoA buffers), PD stub solver, SolverConfig
-- **Contact** — BroadPhase / NarrowPhase / ContactResponse trait pipeline
+- **Solver** — Projective Dynamics robust local-global solver, prefactored Cholesky (`faer`), ARAP co-rotational elements, dihedral bending
+- **Contact** — Spatial hash broad phase (O(n)), projection contact response, pluggable traits
 - **GPU abstraction** — GpuBackend trait, CpuFallback (axpy, dot, fill), ComputeBuffer
 - **Telemetry** — EventBus (mpsc), 7 event types, pluggable sinks
 - **Debug** — InspectionHook trait, state snapshots with bincode serialization
@@ -36,9 +37,8 @@ Built in Rust with a modular crate architecture, Vistio targets production-grade
 
 ### What's Not Yet Implemented
 
-- **Real PD solver** — local-global iteration loop (Tier 1)
-- **Collision detection** — spatial hash, BVH, vertex-triangle tests (Tier 1-2)
-- **GPU compute** — wgpu backend with WGSL shaders (Tier 1-2)
+- **Edge-edge Narrow Phase** — CCD for tunneling prevention (Tier 2-3)
+- **GPU compute** — wgpu backend with WGSL shaders (Tier 2)
 - **Live visual simulation** — real-time wgpu renderer (Tier 2)
 - **IPC barriers** — Incremental Potential Contact (Tier 3)
 - **Adaptive remeshing** — dynamic mesh refinement (Tier 4)
@@ -180,7 +180,7 @@ All tests live in `crates/<name>/tests/<name>_tests.rs`. No inline `#[cfg(test)]
 | Tier | Focus | Status |
 | --- | --- | --- |
 | **Tier 0** | Foundation, traits, pipeline | ✅ Complete |
-| **Tier 1** | Real PD solver, spatial hash, `faer` | 🔲 Planned |
+| **Tier 1** | Real PD solver, spatial hash, `faer` | ✅ Complete |
 | **Tier 2** | wgpu shaders, real-time renderer, BVH | 🔲 Planned |
 | **Tier 3** | IPC barriers, CCD, anisotropic models | 🔲 Planned |
 | **Tier 4** | Adaptive remeshing, implicit solver | 🔲 Planned |

@@ -13,9 +13,13 @@
 pub mod broad;
 pub mod contact;
 pub mod narrow;
+pub mod projection;
 pub mod response;
+pub mod spatial_hash;
 
 pub use broad::BroadPhase;
 pub use contact::{ContactPair, ContactType};
 pub use narrow::NarrowPhase;
+pub use projection::ProjectionContactResponse;
 pub use response::ContactResponse;
+pub use spatial_hash::SpatialHash;

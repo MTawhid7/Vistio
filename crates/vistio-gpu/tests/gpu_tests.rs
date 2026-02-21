@@ -73,6 +73,6 @@ fn cpu_dot() {
 fn cpu_fill() {
     let backend = CpuFallback::new();
     let mut buf = ComputeBuffer::zeros(5);
-    backend.fill(&mut buf, 3.14);
-    assert!(buf.as_slice().iter().all(|&x| (x - 3.14).abs() < 1e-6));
+    backend.fill(&mut buf, std::f32::consts::PI);
+    assert!(buf.as_slice().iter().all(|&x| (x - std::f32::consts::PI).abs() < 1e-6));
 }
