@@ -47,7 +47,7 @@ Built in Rust with a modular crate architecture, Vistio targets production-grade
 
 ## Architecture
 
-```
+```text
 vistio/
 ├── Cargo.toml           # Workspace root
 └── crates/

@@ -22,7 +22,6 @@ struct SimRunner {
     solver: ProjectiveDynamicsSolver,
     state: SimulationState,
     dt: f32,
-    timesteps: u32,
     current_step: u32,
     indices: Vec<u32>, // Flat array of [i0, i1, i2, ...]
 }
@@ -80,7 +79,6 @@ pub fn launch_viewer(scenario: Scenario) -> Result<(), Box<dyn std::error::Error
         solver,
         state,
         dt: scenario.dt,
-        timesteps: scenario.timesteps,
         current_step: 0,
         indices: scenario.garment.indices.clone(),
     };

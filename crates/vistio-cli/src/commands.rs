@@ -145,11 +145,6 @@ pub fn visualize(
     material_name: Option<&str>,
     _output_path: &str, // Kept for CLI compat; Rerun streams directly
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use vistio_material::CoRotationalModel;
-    use vistio_mesh::topology::Topology;
-    use vistio_solver::state::SimulationState;
-    use vistio_solver::strategy::SolverStrategy;
-
     println!("Vistio Visual Simulation (Rerun)");
     println!("════════════════════════════════");
     println!();

@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD024 -->
 # Vistio Worklog
 
 ## 2026-02-20
