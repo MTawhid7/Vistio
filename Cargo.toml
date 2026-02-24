@@ -13,7 +13,7 @@ members = [
     "crates/vistio-telemetry",
     "crates/vistio-io",
     "crates/vistio-render",
-    "crates/vistio-cli",
+    "crates/vistio-cli", "crates/vistio-viewer",
 ]
 
 [workspace.package]

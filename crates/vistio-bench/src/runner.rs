@@ -2,7 +2,9 @@
 
 use std::time::Instant;
 
+use vistio_material::CoRotationalModel;
 use vistio_mesh::topology::Topology;
+use vistio_solver::pd_solver::ProjectiveDynamicsSolver;
 use vistio_solver::state::SimulationState;
 use vistio_solver::strategy::{SolverStrategy, StepResult};
 use vistio_types::VistioResult;
@@ -16,20 +18,38 @@ pub struct BenchmarkRunner;
 impl BenchmarkRunner {
     /// Run a single scenario with the given solver.
     ///
-    /// Returns metrics for the completed run.
+    /// If the scenario has material properties set, uses `init_with_material()`
+    /// for material-aware simulation. Otherwise falls back to standard `init()`.
     pub fn run(
         scenario: &Scenario,
-        solver: &mut dyn SolverStrategy,
+        solver: &mut ProjectiveDynamicsSolver,
     ) -> VistioResult<BenchmarkMetrics> {
         let topology = Topology::build(&scenario.garment);
 
-        // Initialize solver
-        solver.init(&scenario.garment, &topology, &scenario.config)?;
+        // Choose init path based on whether a material is specified
+        let vertex_mass = if let Some(ref properties) = scenario.material {
+            // Tier 2 path: material-aware initialization
+            let model = Box::new(CoRotationalModel::new());
+            solver.init_with_material(
+                &scenario.garment,
+                &topology,
+                &scenario.config,
+                properties,
+                model,
+            )?;
+            // Derive mass from material
+            let total_area = compute_mesh_area(&scenario.garment);
+            properties.mass_per_vertex(scenario.garment.vertex_count(), total_area)
+        } else {
+            // Tier 1 path: standard initialization
+            solver.init(&scenario.garment, &topology, &scenario.config)?;
+            scenario.vertex_mass
+        };
 
         // Initialize simulation state
         let mut state = SimulationState::from_mesh(
             &scenario.garment,
-            scenario.vertex_mass,
+            vertex_mass,
             &scenario.pinned,
         )?;
 
@@ -92,7 +112,7 @@ impl BenchmarkRunner {
 
     /// Run all scenarios and return metrics for each.
     pub fn run_all(
-        solver: &mut dyn SolverStrategy,
+        solver: &mut ProjectiveDynamicsSolver,
     ) -> VistioResult<Vec<BenchmarkMetrics>> {
         use crate::scenarios::ScenarioKind;
         let mut results = Vec::new();
@@ -103,4 +123,24 @@ impl BenchmarkRunner {
         }
         Ok(results)
     }
+}
+
+/// Compute the total surface area of a triangle mesh.
+fn compute_mesh_area(mesh: &vistio_mesh::TriangleMesh) -> f32 {
+    use vistio_math::Vec3;
+    let tri_count = mesh.triangle_count();
+    let mut total = 0.0_f32;
+    for t in 0..tri_count {
+        let idx_base = t * 3;
+        let i0 = mesh.indices[idx_base] as usize;
+        let i1 = mesh.indices[idx_base + 1] as usize;
+        let i2 = mesh.indices[idx_base + 2] as usize;
+        let p0 = Vec3::new(mesh.pos_x[i0], mesh.pos_y[i0], mesh.pos_z[i0]);
+        let p1 = Vec3::new(mesh.pos_x[i1], mesh.pos_y[i1], mesh.pos_z[i1]);
+        let p2 = Vec3::new(mesh.pos_x[i2], mesh.pos_y[i2], mesh.pos_z[i2]);
+        let e1 = p1 - p0;
+        let e2 = p2 - p0;
+        total += 0.5 * e1.cross(e2).length();
+    }
+    total
 }

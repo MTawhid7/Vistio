@@ -1,4 +1,4 @@
-//! Projective Dynamics solver — the core Tier 1 solver.
+//! Projective Dynamics solver — the core Tier 1/2 solver.
 //!
 //! Implements the local-global iteration loop:
 //! 1. **Predict** — inertial position from velocity + gravity
@@ -6,9 +6,17 @@
 //! 3. **Global step** — solve the constant SPD system A * q = rhs
 //! 4. **Repeat** steps 2–3 until convergence or max iterations
 //! 5. **Finalize** — update velocities from position change
+//!
+//! ## Material-Aware Mode (Tier 2)
+//!
+//! When initialized via `init_with_material()`, the solver uses a pluggable
+//! `ConstitutiveModel` for the local step and derives stiffness/mass from
+//! `FabricProperties`. This produces material-specific drape behavior.
 
 use std::time::Instant;
 
+use vistio_material::ConstitutiveModel;
+use vistio_material::FabricProperties;
 use vistio_math::faer_solver::FaerSolver;
 use vistio_math::sparse::SparseSolver;
 use vistio_mesh::TriangleMesh;
@@ -22,10 +30,15 @@ use crate::element::ElementData;
 use crate::state::SimulationState;
 use crate::strategy::{SolverStrategy, StepResult};
 
-/// Projective Dynamics solver with co-rotational (ARAP) constitutive model.
+/// Projective Dynamics solver with pluggable constitutive model.
 ///
 /// Uses `faer` for sparse Cholesky factorization. The system matrix is
 /// prefactored once during `init()` and reused for all timesteps.
+///
+/// ## Two initialization modes
+///
+/// - `init()` — Tier 1 mode: hardcoded ARAP projection, uniform mass
+/// - `init_with_material()` — Tier 2 mode: uses `ConstitutiveModel` + `FabricProperties`
 pub struct ProjectiveDynamicsSolver {
     /// Precomputed FEM element data.
     elements: Option<ElementData>,
@@ -41,6 +54,10 @@ pub struct ProjectiveDynamicsSolver {
     mass: Vec<f32>,
     /// Number of vertices.
     n: usize,
+    /// Optional pluggable constitutive model (Tier 2+).
+    /// When `Some`, the local step delegates to this model.
+    /// When `None`, falls back to hardcoded ARAP.
+    material_model: Option<Box<dyn ConstitutiveModel>>,
 }
 
 impl ProjectiveDynamicsSolver {
@@ -54,7 +71,54 @@ impl ProjectiveDynamicsSolver {
             initialized: false,
             mass: Vec::new(),
             n: 0,
+            material_model: None,
         }
+    }
+
+    /// Initialize the solver with material properties and a constitutive model.
+    ///
+    /// This is the Tier 2+ initialization path. It:
+    /// - Derives per-element stiffness from `FabricProperties`
+    /// - Derives per-vertex mass from the material's areal density
+    /// - Derives bending stiffness from the material's bending properties
+    /// - Uses the provided `ConstitutiveModel` in the local step
+    pub fn init_with_material(
+        &mut self,
+        mesh: &TriangleMesh,
+        topology: &Topology,
+        config: &SolverConfig,
+        properties: &FabricProperties,
+        model: Box<dyn ConstitutiveModel>,
+    ) -> VistioResult<()> {
+        self.n = mesh.vertex_count();
+        self.config = config.clone();
+
+        // Build FEM elements with material-derived stiffness
+        let elements = ElementData::from_mesh_with_material(mesh, properties);
+
+        // Compute area-weighted lumped mass matrix
+        self.mass = compute_lumped_masses(self.n, &elements, properties.density);
+
+        // Assemble the constant system matrix
+        let dt = 1.0 / 60.0;
+        let system_matrix = assemble_system_matrix(self.n, &self.mass, dt, &elements);
+
+        // Prefactor via sparse Cholesky
+        self.solver.factorize(&system_matrix).map_err(|e| {
+            vistio_types::VistioError::InvalidConfig(format!("Cholesky factorization failed: {e}"))
+        })?;
+
+        self.elements = Some(elements);
+
+        // Build bending elements with material-derived stiffness
+        let bending = BendingData::from_topology_with_material(mesh, topology, properties);
+        self.bending = Some(bending);
+
+        // Store the constitutive model for the local step
+        self.material_model = Some(model);
+
+        self.initialized = true;
+        Ok(())
     }
 }
 
@@ -74,14 +138,12 @@ impl SolverStrategy for ProjectiveDynamicsSolver {
         self.n = mesh.vertex_count();
         self.config = config.clone();
 
-        // Compute per-vertex mass (uniform for now)
-        // TODO: Area-weighted mass in Tier 2
-        let total_mass = 1.0_f32; // 1 kg total
-        let per_vertex = total_mass / self.n as f32;
-        self.mass = vec![per_vertex; self.n];
-
         // Build FEM elements with stiffness from config
         let elements = ElementData::from_mesh(mesh, config.stretch_weight * 1000.0);
+
+        // Default density 200 g/m² for the base config
+        let density = 200.0;
+        self.mass = compute_lumped_masses(self.n, &elements, density);
 
         // Assemble the constant system matrix
         let dt = 1.0 / 60.0; // Default timestep for prefactoring
@@ -97,6 +159,9 @@ impl SolverStrategy for ProjectiveDynamicsSolver {
         // Build bending elements from topology
         let bending = BendingData::from_topology(mesh, topology, config.bending_weight * 100.0);
         self.bending = Some(bending);
+
+        // No material model in Tier 1 mode — uses hardcoded ARAP
+        self.material_model = None;
 
         self.initialized = true;
         Ok(())
@@ -145,12 +210,23 @@ impl SolverStrategy for ProjectiveDynamicsSolver {
             let mut proj_z = Vec::with_capacity(elements.len());
 
             for elem in &elements.elements {
-                let (p0, p1, p2) = elements.project(
-                    elem,
-                    &state.pos_x,
-                    &state.pos_y,
-                    &state.pos_z,
-                );
+                // Dispatch to material model if available, otherwise hardcoded ARAP
+                let (p0, p1, p2) = if let Some(ref model) = self.material_model {
+                    elements.project_with_model(
+                        elem,
+                        &state.pos_x,
+                        &state.pos_y,
+                        &state.pos_z,
+                        model.as_ref(),
+                    )
+                } else {
+                    elements.project(
+                        elem,
+                        &state.pos_x,
+                        &state.pos_y,
+                        &state.pos_z,
+                    )
+                };
                 proj_x.push((p0.x, p1.x, p2.x));
                 proj_y.push((p0.y, p1.y, p2.y));
                 proj_z.push((p0.z, p1.z, p2.z));
@@ -267,4 +343,29 @@ impl SolverStrategy for ProjectiveDynamicsSolver {
     fn name(&self) -> &str {
         "ProjectiveDynamics"
     }
+}
+
+/// Compute an area-weighted lumped mass matrix (stored as a vector).
+/// Distributes 1/3 of each triangle's mass to its three vertices.
+fn compute_lumped_masses(n: usize, elements: &ElementData, density_gsm: f32) -> Vec<f32> {
+    let mut mass = vec![0.0; n];
+    let density_kgm2 = density_gsm / 1000.0;
+
+    for elem in &elements.elements {
+        let tri_mass = elem.rest_area * density_kgm2;
+        let third_mass = tri_mass / 3.0;
+
+        for &idx in &elem.indices {
+            mass[idx] += third_mass;
+        }
+    }
+
+    // Ensure no zero masses for floating vertices (though our meshes shouldn't have any)
+    for m in &mut mass {
+        if *m < 1e-8 {
+            *m = 1e-8;
+        }
+    }
+
+    mass
 }

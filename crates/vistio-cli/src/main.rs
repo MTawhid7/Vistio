@@ -30,6 +30,26 @@ enum Commands {
         /// Output CSV file path.
         #[arg(short, long)]
         output: Option<String>,
+
+        /// Material name from the database (e.g., cotton_twill, silk_charmeuse, denim_14oz).
+        /// When set, simulation uses material-aware initialization.
+        #[arg(short, long)]
+        material: Option<String>,
+    },
+
+    /// Run a simulation and export mesh frames for visual inspection.
+    Visualize {
+        /// Which scenario to run.
+        #[arg(short, long, default_value = "hanging_sheet")]
+        scenario: String,
+
+        /// Material name from database.
+        #[arg(short, long)]
+        material: Option<String>,
+
+        /// Output JSON file path.
+        #[arg(short, long, default_value = "simulation.json")]
+        output: String,
     },
 
     /// Inspect a state snapshot file.
@@ -50,7 +70,8 @@ fn main() {
 
     let result = match cli.command {
         Commands::Simulate { config } => commands::simulate(&config),
-        Commands::Benchmark { scenario, output } => commands::benchmark(&scenario, output.as_deref()),
+        Commands::Benchmark { scenario, output, material } => commands::benchmark(&scenario, output.as_deref(), material.as_deref()),
+        Commands::Visualize { scenario, material, output } => commands::visualize(&scenario, material.as_deref(), &output),
         Commands::Inspect { path } => commands::inspect(&path),
         Commands::Validate { path } => commands::validate(&path),
     };

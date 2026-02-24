@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 vistio-types = { path = "../vistio-types" }
+vistio-math = { path = "../vistio-math" }
 vistio-mesh = { path = "../vistio-mesh" }
 vistio-material = { path = "../vistio-material" }
 vistio-io = { path = "../vistio-io" }
@@ -21,6 +22,8 @@ vistio-bench = { path = "../vistio-bench" }
 vistio-render = { path = "../vistio-render" }
 vistio-debug = { path = "../vistio-debug" }
 vistio-telemetry = { path = "../vistio-telemetry" }
+vistio-viewer = { path = "../vistio-viewer" }
 clap = { workspace = true }
 toml = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }

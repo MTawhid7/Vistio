@@ -4,6 +4,7 @@ use vistio_bench::metrics::BenchmarkMetrics;
 use vistio_bench::runner::BenchmarkRunner;
 use vistio_bench::scenarios::{Scenario, ScenarioKind};
 use vistio_debug::snapshot::StateSnapshot;
+use vistio_material::MaterialDatabase;
 use vistio_solver::pd_solver::ProjectiveDynamicsSolver;
 
 /// Run a simulation from config file.
@@ -21,10 +22,28 @@ pub fn simulate(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
 pub fn benchmark(
     scenario_name: &str,
     output_path: Option<&str>,
+    material_name: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("Vistio Benchmark Suite");
     println!("══════════════════════");
     println!();
+
+    // Look up material from database if specified
+    let material_props = if let Some(name) = material_name {
+        let db = MaterialDatabase::with_defaults();
+        let props = db.get(name).ok_or_else(|| {
+            let available: Vec<&str> = db.names();
+            format!(
+                "Unknown material: '{name}'. Available: {}",
+                available.join(", ")
+            )
+        })?;
+        println!("Material: {name}");
+        println!();
+        Some(props.clone())
+    } else {
+        None
+    };
 
     let scenarios: Vec<ScenarioKind> = if scenario_name == "all" {
         ScenarioKind::all().to_vec()
@@ -46,7 +65,12 @@ pub fn benchmark(
     let mut solver = ProjectiveDynamicsSolver::new();
 
     for &kind in &scenarios {
-        let scenario = Scenario::from_kind(kind);
+        let mut scenario = Scenario::from_kind(kind);
+
+        // Apply material if specified
+        if let Some(ref props) = material_props {
+            scenario = scenario.with_material(props.clone());
+        }
 
         println!("Running: {} ({} verts, {} tris, {} steps)",
             kind.name(),
@@ -111,6 +135,61 @@ pub fn inspect(path: &str) -> Result<(), Box<dyn std::error::Error>> {
             .fold(f32::NEG_INFINITY, f32::max);
         println!("Y range:      [{:.4}, {:.4}]", min_y, max_y);
     }
+
+    Ok(())
+}
+
+/// Run a simulation and stream to the Rerun viewer for live inspection.
+pub fn visualize(
+    scenario_name: &str,
+    material_name: Option<&str>,
+    _output_path: &str, // Kept for CLI compat; Rerun streams directly
+) -> Result<(), Box<dyn std::error::Error>> {
+    use vistio_material::CoRotationalModel;
+    use vistio_mesh::topology::Topology;
+    use vistio_solver::state::SimulationState;
+    use vistio_solver::strategy::SolverStrategy;
+
+    println!("Vistio Visual Simulation (Rerun)");
+    println!("════════════════════════════════");
+    println!();
+
+    let kind = match scenario_name {
+        "hanging_sheet" => vistio_bench::scenarios::ScenarioKind::HangingSheet,
+        "sphere_drape" => vistio_bench::scenarios::ScenarioKind::SphereDrape,
+        "self_fold" => vistio_bench::scenarios::ScenarioKind::SelfFold,
+        other => {
+            eprintln!("Unknown scenario: {other}");
+            return Err("Unknown scenario".into());
+        }
+    };
+
+    let mut scenario = vistio_bench::scenarios::Scenario::from_kind(kind);
+
+    // Apply material if specified
+    let material_label = if let Some(name) = material_name {
+        let db = MaterialDatabase::with_defaults();
+        let props = db.get(name).ok_or_else(|| {
+            format!("Unknown material: '{name}'")
+        })?;
+        scenario = scenario.with_material(props.clone());
+        name.to_string()
+    } else {
+        "default".to_string()
+    };
+
+    println!("Scenario:  {}", scenario_name);
+    println!("Material:  {}", material_label);
+    println!("Frames:    {}", scenario.timesteps);
+    println!("Viewer:    Rerun (spawning...)");
+    println!();
+
+    // Launch Bevy Viewer
+    println!("Initializing Bevy Viewer (PBR)...");
+
+    // We don't need full SimulationState init here anymore, as the Bevy viewer
+    // builds its own runner. We just launch the viewer with the scenario.
+    vistio_viewer::launch_viewer(scenario).map_err(|e| format!("Viewer error: {}", e))?;
 
     Ok(())
 }

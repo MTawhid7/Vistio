@@ -74,19 +74,15 @@ pub fn assemble_system_matrix(
         // Dm_inv stored column-major: [a, b, c, d]
         // Column 0: (a, b) = g1
         // Column 1: (c, d) = g2
-        let g1x = elem.dm_inv[0];
-        let g1y = elem.dm_inv[1];
-        let g2x = elem.dm_inv[2];
-        let g2y = elem.dm_inv[3];
+        let a = elem.dm_inv[0]; // dm00
+        let b = elem.dm_inv[1]; // dm10
+        let c = elem.dm_inv[2]; // dm01
+        let d = elem.dm_inv[3]; // dm11
 
-        // Gradient operator rows for each vertex:
-        //   vertex 0: -(g1 + g2) = [-(g1x+g2x), -(g1y+g2y)]
-        //   vertex 1: g1 = [g1x, g1y]
-        //   vertex 2: g2 = [g2x, g2y]
         let g = [
-            [-(g1x + g2x), -(g1y + g2y)], // vertex 0
-            [g1x, g1y],                     // vertex 1
-            [g2x, g2y],                     // vertex 2
+            [-(a + b), -(c + d)],
+            [a, c],
+            [b, d],
         ];
         let idx = [i0, i1, i2];
 
@@ -149,38 +145,37 @@ pub fn assemble_rhs(
         let [i0, i1, i2] = elem.indices;
         let w = elem.weight;
 
-        let g1x = elem.dm_inv[0];
-        let g1y = elem.dm_inv[1];
-        let g2x = elem.dm_inv[2];
-        let g2y = elem.dm_inv[3];
+        let a = elem.dm_inv[0]; // dm00
+        let b = elem.dm_inv[1]; // dm10
+        let c = elem.dm_inv[2]; // dm01
+        let d = elem.dm_inv[3]; // dm11
 
         let g = [
-            [-(g1x + g2x), -(g1y + g2y)],
-            [g1x, g1y],
-            [g2x, g2y],
+            [-(a + b), -(c + d)],
+            [a, c],
+            [b, d],
         ];
         let idx = [i0, i1, i2];
 
         // Get target positions for this element (the relevant coordinate)
         let target = [proj_targets[e].0, proj_targets[e].1, proj_targets[e].2];
 
-        // For the RHS, we need: Sᵢᵀpᵢ
-        // The projection target pᵢ represents the target edge displacements.
-        // We apply: Sᵢᵀ * [target edges expressed through gradient operator]
-        //
-        // Specifically, the target edge contributions:
-        //   target_e1 = target[1] - target[0]  (edge 1)
-        //   target_e2 = target[2] - target[0]  (edge 2)
+        // The projection target pᵢ represents the 3D target positions.
+        // The target edge vectors (for this coordinate) are:
         let te1 = target[1] - target[0];
         let te2 = target[2] - target[0];
 
+        // Compute the target deformation gradient F_target (for this coordinate):
+        // F_target = [te1, te2] * D_m^{-1}
+        let f_target_0 = te1 * a + te2 * b;
+        let f_target_1 = te1 * c + te2 * d;
+
         // RHS contribution from Sᵢᵀ:
-        // For each vertex a: rhs[idx[a]] += w * (g[a] · [te1, te2])
-        // But more precisely, applying the transpose of the gradient:
+        // We apply the transpose of the gradient operator to F_target
         let _ = coord; // coord already selected in the projected targets
-        for a in 0..3 {
-            let contrib = g[a][0] * te1 + g[a][1] * te2;
-            rhs[idx[a]] += w * contrib;
+        for a_idx in 0..3 {
+            let contrib = g[a_idx][0] * f_target_0 + g[a_idx][1] * f_target_1;
+            rhs[idx[a_idx]] += w * contrib;
         }
     }
 

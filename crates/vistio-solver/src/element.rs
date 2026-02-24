@@ -1,6 +1,6 @@
 //! FEM element computation for Projective Dynamics.
 //!
-//! Precomputes per-triangle rest-state data and provides the SVK (St. Venant-Kirchhoff)
+//! Precomputes per-triangle rest-state data and provides the ARAP (co-rotational)
 //! local projection used in the PD local step. Each triangle element stores its
 //! rest-state edge matrix inverse, area, and stiffness weight.
 //!
@@ -10,6 +10,12 @@
 //! 1. Compute deformation gradient F = Ds · Dm⁻¹
 //! 2. Polar decomposition F = R · S
 //! 3. Project: target = R · rest_edges (rotation-aware, resists stretch)
+//!
+//! ## Material-Aware Mode
+//!
+//! When constructed with `from_mesh_with_material()`, per-element stiffness
+//! is derived from `FabricProperties`. Use `project_with_model()` to delegate
+//! projection to a pluggable `ConstitutiveModel`.
 
 use vistio_math::Vec2;
 use vistio_math::Vec3;
@@ -66,9 +72,6 @@ impl ElementData {
             let cross = e1.cross(e2);
             let area = 0.5 * cross.length();
 
-            // Compute Dm (rest-state edge matrix) in 2D
-            // Project edges into the triangle's local frame to get a 2×2 matrix.
-            // Use the triangle's own plane as the reference.
             let dm_inv = compute_dm_inv(e1, e2);
 
             let weight = stiffness * area;
@@ -87,6 +90,23 @@ impl ElementData {
         }
     }
 
+    /// Compute rest-state data using material properties for stiffness.
+    ///
+    /// Derives per-element stiffness from `FabricProperties`:
+    /// - Average stretch stiffness (warp/weft) → element weight
+    /// - Scales by 1000 for appropriate PD energy magnitude
+    ///
+    /// # Arguments
+    /// * `mesh` — Triangle mesh
+    /// * `properties` — Physical fabric properties (KES-derived)
+    pub fn from_mesh_with_material(
+        mesh: &TriangleMesh,
+        properties: &vistio_material::FabricProperties,
+    ) -> Self {
+        let stiffness = properties.avg_stretch_stiffness() * 1000.0;
+        Self::from_mesh(mesh, stiffness)
+    }
+
     /// Returns the number of elements.
     pub fn len(&self) -> usize {
         self.elements.len()
@@ -97,17 +117,13 @@ impl ElementData {
         self.elements.is_empty()
     }
 
-    /// Compute the local projection for one element.
+    /// Compute the local projection for one element (hardcoded ARAP).
     ///
     /// Given current vertex positions, computes the deformation gradient F,
     /// performs polar decomposition F = R·S, and returns the projected
     /// target positions for the three vertices.
     ///
-    /// The projection finds the closest rotation to the current deformation,
-    /// which is the core of the ARAP/co-rotational energy projection.
-    ///
-    /// Returns `(target_p0, target_p1, target_p2)` — the positions the element
-    /// "wants" the vertices to be at.
+    /// Returns `(target_p0, target_p1, target_p2)`.
     pub fn project(
         &self,
         elem: &RestTriangle,
@@ -121,65 +137,78 @@ impl ElementData {
         let p1 = Vec3::new(pos_x[i1], pos_y[i1], pos_z[i1]);
         let p2 = Vec3::new(pos_x[i2], pos_y[i2], pos_z[i2]);
 
-        // 1. Compute deformation gradient: F = Ds · Dm⁻¹
         let f = deformation_gradient(p0, p1, p2, elem.dm_inv);
-
-        // 2. Polar decomposition: F = R · S
         let pd = polar_decomposition_3x2(&f);
 
-        // 3. Project: target edges = R · rest_edges
-        // Rest edges in 2D local frame:
-        //   dm = Dm_inv⁻¹ (we need the forward Dm, but we stored Dm_inv)
-        // Instead, we use: target = R · Dm  (Dm = Ds_rest)
-        // But we don't store Dm directly. We can reconstruct:
-        //   Dm = [e1_rest, e2_rest] as 3×2 in the rest frame
-        //
-        // Simpler approach: The projected positions are:
-        //   p0_proj = centroid - R * (avg offset in rest frame)
-        //   p1_proj = p0_proj + R * e1_rest_2d
-        //   p2_proj = p0_proj + R * e2_rest_2d
-        //
-        // However, for PD we project each vertex toward where the rotation R
-        // would place it relative to the element's centroid.
-        //
-        // The standard ARAP PD projection:
-        //   For each triangle with rotation R_t, the projected positions are:
-        //   p_i_proj = centroid + R_t * (rest_pos_i - rest_centroid)
-        //
-        // We compute this using the centroid of current positions.
+        self.reconstruct_from_target_f(&pd.rotation, elem, p0, p1, p2)
+    }
 
-        // Current centroid
+    /// Compute the local projection using a pluggable ConstitutiveModel.
+    ///
+    /// Computes the deformation gradient F, passes it to the model's `project()`,
+    /// then reconstructs target positions from the projected deformation gradient.
+    ///
+    /// This is the Tier 2+ entry point — different models (co-rotational,
+    /// isotropic, anisotropic) produce different target gradients.
+    pub fn project_with_model(
+        &self,
+        elem: &RestTriangle,
+        pos_x: &[f32],
+        pos_y: &[f32],
+        pos_z: &[f32],
+        model: &dyn vistio_material::ConstitutiveModel,
+    ) -> (Vec3, Vec3, Vec3) {
+        let [i0, i1, i2] = elem.indices;
+
+        let p0 = Vec3::new(pos_x[i0], pos_y[i0], pos_z[i0]);
+        let p1 = Vec3::new(pos_x[i1], pos_y[i1], pos_z[i1]);
+        let p2 = Vec3::new(pos_x[i2], pos_y[i2], pos_z[i2]);
+
+        let f = deformation_gradient(p0, p1, p2, elem.dm_inv);
+
+        // Recover effective stiffness: weight = stiffness * area
+        let effective_stiffness = elem.weight / elem.rest_area.max(1e-12);
+        let projected = model.project(&f, elem.rest_area, effective_stiffness);
+
+        self.reconstruct_from_target_f(&projected.target_f, elem, p0, p1, p2)
+    }
+
+    /// Reconstruct target vertex positions from a projected 3×2 deformation gradient.
+    ///
+    /// Given a target F (rotation for ARAP, or any projected gradient from a model),
+    /// computes positions by applying F to the rest-state edges and anchoring
+    /// at the current centroid.
+    fn reconstruct_from_target_f(
+        &self,
+        target_f: &vistio_math::mat3x2::Mat3x2,
+        elem: &RestTriangle,
+        p0: Vec3,
+        p1: Vec3,
+        p2: Vec3,
+    ) -> (Vec3, Vec3, Vec3) {
         let centroid = (p0 + p1 + p2) / 3.0;
 
-        // We need rest-state relative positions. Reconstruct from Dm_inv:
-        // Dm = Dm_inv^{-1}, where Dm is the 2x2 rest edge matrix
-        // Dm_inv = [a, b, c, d] (column-major)
+        // Reconstruct rest-state edges from Dm_inv
         let det = elem.dm_inv[0] * elem.dm_inv[3] - elem.dm_inv[1] * elem.dm_inv[2];
         let (rest_e1_2d, rest_e2_2d) = if det.abs() > 1e-12 {
             let inv_det = 1.0 / det;
-            // Dm = inverse of Dm_inv
             let dm00 = elem.dm_inv[3] * inv_det;
             let dm01 = -elem.dm_inv[2] * inv_det;
             let dm10 = -elem.dm_inv[1] * inv_det;
             let dm11 = elem.dm_inv[0] * inv_det;
             (Vec2::new(dm00, dm10), Vec2::new(dm01, dm11))
         } else {
-            // Degenerate — use identity as fallback
             return (p0, p1, p2);
         };
 
-        // Rest-state relative positions (from vertex 0)
-        // In 3D, we apply R (3×2) to the 2D rest offsets
-        let rot = &pd.rotation;
+        // Apply target_f to rest edges
+        let re1 = target_f.col0 * rest_e1_2d.x + target_f.col1 * rest_e1_2d.y;
+        let re2 = target_f.col0 * rest_e2_2d.x + target_f.col1 * rest_e2_2d.y;
 
-        // Rotated rest edges: R * e_rest_2d
-        let re1 = rot.col0 * rest_e1_2d.x + rot.col1 * rest_e1_2d.y;
-        let re2 = rot.col0 * rest_e2_2d.x + rot.col1 * rest_e2_2d.y;
-
-        // Rest centroid offset from p0
+        // Rest centroid offset from vertex 0
         let rest_c = (re1 + re2) / 3.0;
 
-        // Projected positions: anchor at current centroid
+        // Projected positions anchored at current centroid
         let p0_proj = centroid - rest_c;
         let p1_proj = p0_proj + re1;
         let p2_proj = p0_proj + re2;

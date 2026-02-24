@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use vistio_material::FabricProperties;
 use vistio_mesh::generators::{quad_grid, uv_sphere};
 use vistio_mesh::TriangleMesh;
 use vistio_solver::SolverConfig;
@@ -58,8 +59,11 @@ pub struct Scenario {
     pub timesteps: u32,
     /// Timestep size (seconds).
     pub dt: f32,
-    /// Per-vertex mass (kg).
+    /// Per-vertex mass (kg). Used when `material` is `None`.
     pub vertex_mass: f32,
+    /// Optional material properties. When set, the runner uses
+    /// `init_with_material()` for material-aware simulation.
+    pub material: Option<FabricProperties>,
 }
 
 impl Scenario {
@@ -70,11 +74,17 @@ impl Scenario {
     pub fn hanging_sheet() -> Self {
         let cols = 20;
         let rows = 20;
-        let garment = quad_grid(cols, rows, 1.0, 1.0);
+        let mut garment = quad_grid(cols, rows, 1.0, 1.0);
         let n = garment.vertex_count();
         let verts_x = cols + 1;
 
-        // Pin the top row
+        // Rotate to XZ plane and elevate: Y = 1.0
+        for i in 0..n {
+            garment.pos_z[i] = garment.pos_y[i];
+            garment.pos_y[i] = 1.0;
+        }
+
+        // Pin the top row (now edge along Z)
         let mut pinned = vec![false; n];
         for item in pinned.iter_mut().take(verts_x) {
             *item = true;
@@ -89,6 +99,7 @@ impl Scenario {
             timesteps: 120, // 2 seconds at 60fps
             dt: 1.0 / 60.0,
             vertex_mass: 0.002, // ~200g/m² cloth, distributed across 441 vertices
+            material: None,
         }
     }
 
@@ -110,6 +121,7 @@ impl Scenario {
             timesteps: 180, // 3 seconds
             dt: 1.0 / 60.0,
             vertex_mass: 0.002,
+            material: None,
         }
     }
 
@@ -138,6 +150,7 @@ impl Scenario {
             timesteps: 120,
             dt: 1.0 / 60.0,
             vertex_mass: 0.002,
+            material: None,
         }
     }
 
@@ -148,5 +161,14 @@ impl Scenario {
             ScenarioKind::SphereDrape => Self::sphere_drape(),
             ScenarioKind::SelfFold => Self::self_fold(),
         }
+    }
+
+    /// Set a material for this scenario, enabling material-aware simulation.
+    ///
+    /// When set, the runner uses `init_with_material()` instead of `init()`,
+    /// deriving mass and stiffness from the material properties.
+    pub fn with_material(mut self, properties: FabricProperties) -> Self {
+        self.material = Some(properties);
+        self
     }
 }

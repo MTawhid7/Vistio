@@ -78,6 +78,45 @@
 
 ---
 
+## 2026-02-24
+
+### Current State
+
+**Tier 2 — Advanced Physics & Visual Simulation (In Progress).**
+We have successfully replaced the headless runtime and Rerun visualizer with a dedicated, high-fidelity 3D viewer powered by **Bevy**. The simulation now benefits from PBR materials, dynamic shadows, and interactive pan/orbit camera controls. This real-time visual feedback has been instrumental in diagnosing and fixing several critical physics anomalies (triangle collapse, hourglass curling, and mesh chirality). However, while we have solved the major structural bugs, a new, complex behavioral anomaly (edge crumpling) has emerged that requires deeper physics tuning.
+
+### Progress
+
+- **Rendering Upgrades**: Migrated to Bevy ECS for the `vistio-viewer`. Implemented dynamic smooth vertex normal calculation, double-sided PBR materials, and a `PanOrbitCamera` for full 3D inspection.
+- **Continuous Simulation**: Removed the hardcoded timestep halt condition, allowing the simulation to free-run for continuous observation.
+- **Physics Fix 1 (Triangle Collapse)**: The hanging sheet was previously collapsing to a singular point. Diagnosed as a missing rest-state projection in `assemble_rhs`. By computing the true target deformation gradient $F_{target} = [target\_edges] \cdot D_m^{-1}$ before applying the gradient operator $G_i$, the structural integrity of the stiffness matrix was restored.
+- **Physics Fix 2 (Hourglass Curling)**: The vertical edges of the sheet were curling inward unnaturally. Identified root cause as a Uniform Mass Distribution bias. Implemented an Area-Weighted Lumped Mass Matrix in `compute_lumped_masses`, distributing exactly 1/3 of each triangle's physical mass to its corner vertices, completely eliminating the hourglass effect.
+- **Physics Fix 3 (Structural Anisotropy / Mesh Twist)**: We observed asymmetric draping where one edge curled backward and a bottom corner twisted upward. Diagnosed as "mesh chirality" caused by the `quad_grid` splitting every quad uniformly (top-left to bottom-right). Fixed by implementing an alternating checkerboard triangulation pattern, perfectly balancing the diagonal resistance.
+
+### Key Observations & Issues Encountered
+
+While the vertical edges now drape perfectly straight and symmetrical, **a new complex anomaly has been observed at the bottom horizontal edge:**
+
+1. **The Crumpling Effect**: The bottom edge is not smooth. It appears crumpled and forms wave-like shapes, closely resembling a torn page from a book (buckling).
+2. **Persistent Curling**: After the kinetic energy ostensibly settles, the left side still develops a pronounced inward curve toward the back.
+3. **Upward Corner Twist**: Both bottom corners actively curl upward and physically lock into that unnatural, high-energy position.
+
+### Suspected Causes
+
+The fabric behaves as though it has "stored internal energy" that does not dissipate. Real cloth hangs limply because it has virtually zero resistance to in-plane compression—it simply buckles into tiny micro-wrinkles almost immediately. Our mathematical model appears to be forcefully resisting compression or incorrectly handling bending rest states, locking the mesh into a macroscopic local energy minimum.
+
+1. **Symmetric Compression Stiffness (Co-Rotational Model)**: Standard co-rotational FEM inherently resists local compression just as strongly as it resists stretching. When the hanging sheet slightly compresses under its own weight horizontally (due to Poisson's ratio pulling inward), this artificial compressive stiffness forces the mesh to rigidly buckle out-of-plane into large, macroscopic waves (the "crumpling" effect) to relieve the stress. Fabric should lack this macroscopic compressive stiffness.
+2. **Bending Formulation Artifacts**: The dihedral bending constraints (acting across the hinge edges) might have incorrect rest-angle initializations. Given our recent checkerboard topology change, the bending logic (`bending.rs`) might be generating non-zero restorative forces at rest, actively rolling the corners upward. If the dihedral springs disagree with the planar rest state, they will store energy indefinitely.
+3. **Lack of Internal Damping**: The simulation might lack sufficient Rayleigh or internal material damping to help the geometry relax out of these high-frequency bending modes, causing the curls to persist and bounce indefinitely rather than settling flat.
+
+### Future Plan and Next Steps
+
+- [ ] **Investigate Compressive Stiffness**: Analyze the co-rotational stress tensor calculation in `vistio-material/src/corotational.rs`. Investigate implementing a strain-limiting approach or specifically zeroing out compressive stress components (Tension-Field Theory) to allow the fabric to properly buckle at the micro-level without macroscopic crumpling.
+- [ ] **Review Bending Constraints**: Audit the `bending.rs` logic to ensure the dihedral hinge rest angles are strictly calculated as $0$ or $\pi$ and are completely unaffected by the alternating checkerboard triangulation.
+- [ ] **Tune Material Properties**: Adjust the balance between stretch stiffness, bending stiffness, and density (`vistio-material/src/properties.rs`) to find a more realistic energy minimum for the hanging scenario.
+
+---
+
 <!-- TEMPLATE: Copy the block below for each new day -->
 
 <!--

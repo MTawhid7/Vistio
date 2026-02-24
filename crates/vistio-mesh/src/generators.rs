@@ -56,6 +56,10 @@ pub fn quad_grid(cols: usize, rows: usize, width: f32, height: f32) -> TriangleM
     }
 
     // Generate triangles (two per quad)
+    // We use a checkerboard pattern for diagonals to prevent structural anisotropy.
+    // Every quad has two possible diagonals:
+    // - Option A (even): (top_left, bot_right) splitting the quad into [TL, BL, TR] and [TR, BL, BR]
+    // - Option B (odd) : (bot_left, top_right) splitting the quad into [TL, BL, BR] and [TL, BR, TR]
     for j in 0..rows {
         for i in 0..cols {
             let top_left = (j * verts_x + i) as u32;
@@ -63,15 +67,29 @@ pub fn quad_grid(cols: usize, rows: usize, width: f32, height: f32) -> TriangleM
             let bot_left = top_left + verts_x as u32;
             let bot_right = bot_left + 1;
 
-            // Upper-left triangle
-            mesh.indices.push(top_left);
-            mesh.indices.push(bot_left);
-            mesh.indices.push(top_right);
+            if (i + j) % 2 == 0 {
+                // Diagonal: top-left to bottom-right
+                // Upper-left triangle
+                mesh.indices.push(top_left);
+                mesh.indices.push(bot_left);
+                mesh.indices.push(top_right);
 
-            // Lower-right triangle
-            mesh.indices.push(top_right);
-            mesh.indices.push(bot_left);
-            mesh.indices.push(bot_right);
+                // Lower-right triangle
+                mesh.indices.push(top_right);
+                mesh.indices.push(bot_left);
+                mesh.indices.push(bot_right);
+            } else {
+                // Diagonal: bottom-left to top-right
+                // Lower-left triangle
+                mesh.indices.push(top_left);
+                mesh.indices.push(bot_left);
+                mesh.indices.push(bot_right);
+
+                // Upper-right triangle
+                mesh.indices.push(top_left);
+                mesh.indices.push(bot_right);
+                mesh.indices.push(top_right);
+            }
 
             mesh.material_ids.push(MaterialId(0));
             mesh.material_ids.push(MaterialId(0));
@@ -146,4 +164,3 @@ pub fn uv_sphere(radius: f32, stacks: usize, slices: usize) -> TriangleMesh {
 
     mesh
 }
-

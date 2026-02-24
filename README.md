@@ -181,7 +181,7 @@ All tests live in `crates/<name>/tests/<name>_tests.rs`. No inline `#[cfg(test)]
 | --- | --- | --- |
 | **Tier 0** | Foundation, traits, pipeline | ✅ Complete |
 | **Tier 1** | Real PD solver, spatial hash, `faer` | ✅ Complete |
-| **Tier 2** | wgpu shaders, real-time renderer, BVH | 🔲 Planned |
+| **Tier 2** | Bevy renderer, advanced physics tuning | 🔄 In Progress |
 | **Tier 3** | IPC barriers, CCD, anisotropic models | 🔲 Planned |
 | **Tier 4** | Adaptive remeshing, implicit solver | 🔲 Planned |
 

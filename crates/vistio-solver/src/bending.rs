@@ -135,6 +135,20 @@ impl BendingData {
         }
     }
 
+    /// Build bending elements from mesh topology using material properties.
+    ///
+    /// Derives bending stiffness from `FabricProperties`:
+    /// - Average bending stiffness (warp/weft) → element weight
+    /// - Scales by 100 for appropriate PD energy magnitude
+    pub fn from_topology_with_material(
+        mesh: &TriangleMesh,
+        topology: &Topology,
+        properties: &vistio_material::FabricProperties,
+    ) -> Self {
+        let stiffness = properties.avg_bending_stiffness() * 100.0;
+        Self::from_topology(mesh, topology, stiffness)
+    }
+
     /// Returns the number of bending elements.
     pub fn len(&self) -> usize {
         self.elements.len()

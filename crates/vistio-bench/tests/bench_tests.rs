@@ -3,7 +3,7 @@
 use vistio_bench::metrics::BenchmarkMetrics;
 use vistio_bench::runner::BenchmarkRunner;
 use vistio_bench::scenarios::{Scenario, ScenarioKind};
-use vistio_solver::pd_stub::ProjectiveDynamicsStub;
+use vistio_solver::pd_solver::ProjectiveDynamicsSolver;
 
 // ─── Scenario Tests ───────────────────────────────────────────
 
@@ -46,7 +46,7 @@ fn all_scenarios() {
 fn run_hanging_sheet() {
     let mut scenario = Scenario::hanging_sheet();
     scenario.timesteps = 5; // Very short for testing
-    let mut solver = ProjectiveDynamicsStub::new();
+    let mut solver = ProjectiveDynamicsSolver::new();
     let metrics = BenchmarkRunner::run(&scenario, &mut solver).unwrap();
 
     assert_eq!(metrics.scenario, "hanging_sheet");
@@ -58,7 +58,7 @@ fn run_hanging_sheet() {
 #[test]
 fn run_all_scenarios() {
     // Use minimal timesteps for speed
-    let mut solver = ProjectiveDynamicsStub::new();
+    let mut solver = ProjectiveDynamicsSolver::new();
     let kinds = ScenarioKind::all();
     for &kind in kinds {
         let mut scenario = Scenario::from_kind(kind);
