@@ -2,6 +2,13 @@
 //!
 //! Provides polar decomposition (F = R·S) needed by co-rotational FEM,
 //! and SVD for robust handling of degenerate/inverted elements.
+//!
+//! ## Tension-Field Theory
+//!
+//! The [`clamp_stretch`] function implements tension-field theory by clamping
+//! compressive singular values to 1.0. This allows the constitutive model to
+//! zero out compressive stress while preserving tensile behavior — essential
+//! for realistic cloth that buckles rather than resisting compression.
 
 use crate::mat3x2::Mat3x2;
 use glam::Vec3;
@@ -16,6 +23,46 @@ pub struct PolarDecomposition {
     pub rotation: Mat3x2,
     /// Stretch part (2×2 symmetric, stored as [s00, s01, s01, s11]).
     pub stretch: [f32; 4],
+    /// Principal stretches (singular values σ₁ ≥ σ₂ ≥ 0).
+    /// σ < 1.0 means compression, σ > 1.0 means extension.
+    pub singular_values: (f32, f32),
+    /// Eigenvectors of the stretch tensor (columns of V in S = V diag(σ) V^T).
+    /// Stored as (v0, v1) where v0 corresponds to σ₁.
+    pub eigenvectors: (glam::Vec2, glam::Vec2),
+}
+
+/// Clamp a 2×2 stretch tensor to remove compressive stress (tension-field theory).
+///
+/// Given the eigendecomposition of S (singular values and eigenvectors from
+/// `PolarDecomposition`), clamps any singular value > 1.0 down to 1.0 for the
+/// *target*, keeping compressive singular values matching the actual deformation.
+///
+/// The effect on the energy E = ||F - R·S_target||²:
+/// - **Tensile** (σ > 1.0): S_target has σ_target = 1.0, so the element is pulled
+///   back to its rest length. Normal stretch resistance is preserved.
+/// - **Compressive** (σ < 1.0): S_target has σ_target = σ (matches actual deformation),
+///   so the energy contribution is zero. No compressive restoring force.
+///
+/// This allows fabric to freely compress horizontally under Poisson effect
+/// without generating restoring forces that cause macroscopic buckling.
+///
+/// Returns the clamped 2×2 stretch tensor [s00, s01, s01, s11].
+pub fn clamp_stretch(polar: &PolarDecomposition) -> [f32; 4] {
+    let (s0, s1) = polar.singular_values;
+    let (v0, v1) = polar.eigenvectors;
+
+    // For the target: clamp σ to min(σ, 1.0)
+    // σ > 1.0 (tensile) → target = 1.0 (restore to rest length)
+    // σ < 1.0 (compressive) → target = σ (no restoring force)
+    let cs0 = s0.min(1.0);
+    let cs1 = s1.min(1.0);
+
+    // Reconstruct S_target = V * diag(cs0, cs1) * V^T
+    let s00 = v0.x * v0.x * cs0 + v1.x * v1.x * cs1;
+    let s01 = v0.x * v0.y * cs0 + v1.x * v1.y * cs1;
+    let s11 = v0.y * v0.y * cs0 + v1.y * v1.y * cs1;
+
+    [s00, s01, s01, s11]
 }
 
 /// Compute the polar decomposition of a 3×2 deformation gradient.
@@ -50,6 +97,8 @@ pub fn polar_decomposition_3x2(f: &Mat3x2) -> PolarDecomposition {
         return PolarDecomposition {
             rotation: Mat3x2::IDENTITY,
             stretch: [0.0, 0.0, 0.0, 0.0],
+            singular_values: (0.0, 0.0),
+            eigenvectors: (glam::Vec2::X, glam::Vec2::Y),
         };
     }
 
@@ -83,6 +132,8 @@ pub fn polar_decomposition_3x2(f: &Mat3x2) -> PolarDecomposition {
     PolarDecomposition {
         rotation,
         stretch: [s00, s01, s01, s11],
+        singular_values: (s0, s1),
+        eigenvectors: (v0, v1),
     }
 }
 

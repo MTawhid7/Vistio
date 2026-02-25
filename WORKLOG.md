@@ -112,11 +112,50 @@ The fabric behaves as though it has "stored internal energy" that does not dissi
 
 ### Future Plan and Next Steps
 
-- [ ] **Investigate Compressive Stiffness**: Analyze the co-rotational stress tensor calculation in `vistio-material/src/corotational.rs`. Investigate implementing a strain-limiting approach or specifically zeroing out compressive stress components (Tension-Field Theory) to allow the fabric to properly buckle at the micro-level without macroscopic crumpling.
-- [ ] **Review Bending Constraints**: Audit the `bending.rs` logic to ensure the dihedral hinge rest angles are strictly calculated as $0$ or $\pi$ and are completely unaffected by the alternating checkerboard triangulation.
-- [ ] **Tune Material Properties**: Adjust the balance between stretch stiffness, bending stiffness, and density (`vistio-material/src/properties.rs`) to find a more realistic energy minimum for the hanging scenario.
+- [x] **Investigate Compressive Stiffness**: Analyze the co-rotational stress tensor calculation in `vistio-material/src/corotational.rs`. Investigate implementing a strain-limiting approach or specifically zeroing out compressive stress components (Tension-Field Theory) to allow the fabric to properly buckle at the micro-level without macroscopic crumpling.
+- [x] **Review Bending Constraints**: Audit the `bending.rs` logic to ensure the dihedral hinge rest angles are strictly calculated as $0$ or $\pi$ and are completely unaffected by the alternating checkerboard triangulation.
+- [x] **Tune Material Properties**: Adjust the balance between stretch stiffness, bending stiffness, and density (`vistio-material/src/properties.rs`) to find a more realistic energy minimum for the hanging scenario.
 
 ---
+
+## 2026-02-25
+
+### Current State
+
+**Tier 0–2 Physics & Collision completion (In Progress).**
+We have successfully resolved the complex "crumpling," "persistent curling," and "corner twist" anomalies. The simulation is now highly stable and visually correct. Furthermore, we integrated a comprehensive collision pipeline (ground plane, self-collision) and moved closer to supporting orthotropic (woven) materials.
+
+### Progress
+
+- **Physics Fix 1 (Crumpling):** Implemented tension-field theory in the co-rotational model by clamping the principal stretches. By applying `min(σ, 1.0)`, we effectively zeroed out compressive stress, allowing the fabric to buckle naturally at the macroscopic level without storing artificial compression energy.
+- **Physics Fix 2 (Curling/Twisting):** Addressed persistent curling by implementing strict rest-angle clamping for dihedral bending constraints (snapping to exactly 0 or $\pi$). Added mass-proportional Rayleigh damping (`v *= 1/(1 + α_M*dt)`) to dissipate high-frequency energy accumulation in the corners.
+- **Physics Fix 3 (Bending System Matrix):** Replaced the post-solve bending hack with true Projective Dynamics integration. Bending spring contributions are now directly assembled into the global system matrix $A$ and RHS vectors using a discrete Laplacian stencil `[-1, -1, 1, 1]`.
+- **Collision Pipeline Integration:** Created a unified collision architectural pipeline encompassing broad, narrow, and response phases. Implemented `VertexTriangleTest` (using barycentric coordinates), `GroundPlane` collision, and fully wired them into the standard simulation step inside `BenchmarkRunner`.
+- **Self-Collision System:** Implemented a robust 3-phase self-collision solver:
+  1. *Detection:* Spatial hashing paired with an N-ring (`TopologyExclusion`) BFS exclusion filter to eliminate false positives from immediate neighbors.
+  2. *Coloring:* A greedy graph coloring pass with u64 bitmasks to group candidate pairs into conflict-free batches.
+  3. *Resolution:* Mass-weighted position corrections applied independently and safely per color batch.
+- **Anisotropy Preparation:** Scaffolded the `OrthotropicLinearModel`. It utilizes polar decomposition to extract structural stretch and applies direction-dependent stiffness multipliers (warp vs. weft) to the singular values, laying the groundwork for realistic woven fabric behavior.
+
+### Key Observations
+
+- **Tension-Field Theory is Transformative:** Standard co-rotational models are isotropic and symmetric in their stretch resistance. Adopting tension-field strain limiting fundamentally changed the drape behavior from "rubbery sheet" to "limp fabric." It completely eliminated the unrealistic macroscopic wavy crumpling.
+- **Bending Matrix Integration:** Moving bending from a local-only hack into the global system matrix $A$ drastically improved the convergence rate of the local-global solver, removing residual jitter.
+- **Self-Collision Parallelism:** Constructing the conflict graph and coloring it dynamically is highly effective. Even in dense states, the number of colors (batches) remains small, unlocking thread-safe collision resolution without critical sections or atomic operations.
+- **Initialization Ordering Bug Fix:** Discovered and fixed a critical bug where bending data was being assembled *after* the system matrix. When running multiple sequential scenarios in the benchmark suite, the system matrix was erroneously referencing the previous scenario's bending layout, causing an index-out-of-bounds panic.
+
+### Issues & Decisions
+
+- **Decision:** Chose to resolve self-collisions with a position-level projection rather than velocity impulses, to maintain stability and compatibility with the Projective Dynamics paradigm.
+- **Decision:** Utilized explicit bounds checking during system matrix assembly. Enforced strict initialization ordering: compute topology -> elements -> bending -> matrix.
+- **Internal Optimization:** Used `vistio_math::Vec3` inside `vistio-contact` instead of pulling in `glam` as a dependency, keeping the collision crate pure and lightweight.
+
+### Next Steps
+
+- [ ] **Tier 2:** Refine visual rendering within Bevy and implement robust shadow casting
+- [ ] **Tier 2:** Implement `WgpuBackend` for GPU-accelerated compute
+- [ ] **Tier 3:** Complete Anisotropic (Warp/Weft) material integration across the pipeline
+- [ ] **Tier 3:** Implement Continuous Collision Detection (Edge-Edge/Vertex-Triangle) for guaranteed intersection-free frames
 
 <!-- TEMPLATE: Copy the block below for each new day -->
 

@@ -16,11 +16,13 @@
 pub mod corotational;
 pub mod database;
 pub mod isotropic;
+pub mod orthotropic;
 pub mod properties;
 pub mod traits;
 
 pub use corotational::CoRotationalModel;
 pub use database::MaterialDatabase;
 pub use isotropic::IsotropicLinearModel;
+pub use orthotropic::OrthotropicLinearModel;
 pub use properties::FabricProperties;
 pub use traits::ConstitutiveModel;

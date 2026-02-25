@@ -1,10 +1,12 @@
 //! PD system matrix assembly for Projective Dynamics.
 //!
-//! Builds the constant system matrix `A = (M/h²) + Σ wᵢ Sᵢᵀ Sᵢ`
+//! Builds the constant system matrix `A = (M/h²) + Σ wᵢ Sᵢᵀ Sᵢ + Σ wᵇⱼ Lⱼᵀ Lⱼ`
 //! where:
 //! - `M/h²` is the mass matrix scaled by 1/dt²
-//! - `Sᵢ` is the selection-gradient matrix for triangle i
+//! - `Sᵢ` is the selection-gradient matrix for triangle i (membrane)
 //! - `wᵢ` is the stiffness weight for triangle i
+//! - `Lⱼ` is the discrete Laplacian operator for bending edge j
+//! - `wᵇⱼ` is the bending stiffness weight for edge j
 //!
 //! The matrix is N×N (one per coordinate axis), solved three times
 //! per global step (for X, Y, Z) using the same cached factorization.
@@ -12,9 +14,10 @@
 //! Also assembles the RHS vector for the PD global step.
 
 use vistio_math::sparse::CsrMatrix;
+use crate::bending::BendingData;
 use crate::element::ElementData;
 
-/// Assemble the PD system matrix A = (M/h²) + Σ wᵢ Sᵢᵀ Sᵢ.
+/// Assemble the PD system matrix A = (M/h²) + Σ wᵢ Sᵢᵀ Sᵢ + Σ wᵇⱼ Lⱼᵀ Lⱼ.
 ///
 /// This matrix is constant as long as:
 /// - Topology doesn't change (no remeshing)
@@ -27,26 +30,29 @@ use crate::element::ElementData;
 /// * `n` — Number of vertices
 /// * `mass` — Per-vertex mass (length N)
 /// * `dt` — Timestep
-/// * `elements` — Precomputed element data
+/// * `elements` — Precomputed element data (membrane stiffness)
+/// * `bending` — Optional bending data (bending stiffness)
 pub fn assemble_system_matrix(
     n: usize,
     mass: &[f32],
     dt: f32,
     elements: &ElementData,
+    bending: Option<&BendingData>,
 ) -> CsrMatrix {
     let inv_dt2 = 1.0 / (dt * dt);
 
     // Accumulate via triplets (row, col, value)
-    // Capacity estimate: N diagonal + ~6 entries per triangle × #triangles
+    // Capacity estimate: N diagonal + ~6 entries per triangle × #triangles + 16 per bending edge
+    let bending_count = bending.map_or(0, |b| b.len());
     let mut triplets: Vec<(usize, usize, f32)> =
-        Vec::with_capacity(n + elements.len() * 9);
+        Vec::with_capacity(n + elements.len() * 9 + bending_count * 16);
 
     // Mass term: M/h² → diagonal entries
     for (i, &m) in mass.iter().enumerate().take(n) {
         triplets.push((i, i, m * inv_dt2));
     }
 
-    // Stiffness term: Σ wᵢ Sᵢᵀ Sᵢ
+    // Membrane stiffness term: Σ wᵢ Sᵢᵀ Sᵢ
     // For each triangle (i0, i1, i2) with Dm_inv = [a, b, c, d]:
     //
     // The selection-gradient matrix Sᵢ maps global positions to local
@@ -98,17 +104,51 @@ pub fn assemble_system_matrix(
         }
     }
 
+    // Bending stiffness term: Σ wᵇⱼ Lⱼᵀ Lⱼ
+    //
+    // For each bending element (v0, v1, wa, wb), we use a uniform
+    // discrete Laplacian stencil: L = [-1, -1, 1, 1] for the 4 vertices.
+    // This represents the "difference of differences" across the hinge.
+    //
+    // LᵀL produces a 4×4 matrix:
+    //   [ 1  1 -1 -1]   (self-products on diagonal, cross-products off-diagonal)
+    //   [ 1  1 -1 -1]
+    //   [-1 -1  1  1]
+    //   [-1 -1  1  1]
+    //
+    // Each entry is scaled by wᵇⱼ = bending_weight.
+    if let Some(bend) = bending {
+        for elem in &bend.elements {
+            let idx = [elem.v0, elem.v1, elem.wing_a, elem.wing_b];
+            let w = elem.weight;
+
+            // Laplacian stencil coefficients: [-1, -1, 1, 1]
+            let stencil = [-1.0_f32, -1.0, 1.0, 1.0];
+
+            for a in 0..4 {
+                for b in 0..4 {
+                    let val = w * stencil[a] * stencil[b];
+                    if val.abs() > 1e-12 {
+                        triplets.push((idx[a], idx[b], val));
+                    }
+                }
+            }
+        }
+    }
+
     CsrMatrix::from_triplets(n, n, &triplets)
 }
 
 /// Assemble the RHS vector for the PD global step.
 ///
-/// RHS = (M/h²) · q_pred + Σ wᵢ Sᵢᵀ pᵢ
+/// RHS = (M/h²) · q_pred + Σ wᵢ Sᵢᵀ pᵢ + Σ wᵇⱼ Lⱼᵀ pᵇⱼ
 ///
 /// where:
 /// - `q_pred` is the predicted position (from inertia)
-/// - `pᵢ` is the local projection target for element i
+/// - `pᵢ` is the local projection target for element i (membrane)
+/// - `pᵇⱼ` is the local projection target for bending element j
 /// - `Sᵢᵀ` scatters the triangle-local projection back to global
+/// - `Lⱼᵀ` scatters the bending projection back to global
 ///
 /// # Arguments
 /// * `n` — Number of vertices
@@ -116,11 +156,10 @@ pub fn assemble_system_matrix(
 /// * `dt` — Timestep
 /// * `pred` — Predicted positions (one coordinate axis)
 /// * `proj_targets` — Per-element projection target for each vertex
-///   `proj_targets[e] = (p0, p1, p2)` target positions
-///   for element `e`, extracting the relevant coordinate
-///   component.
 /// * `elements` — Precomputed element data
 /// * `coord` — Which coordinate axis (0=X, 1=Y, 2=Z)
+/// * `bending` — Optional bending data
+/// * `bending_targets` — Optional per-bending-element projection targets (v0, v1, wa, wb)
 pub fn assemble_rhs(
     n: usize,
     mass: &[f32],
@@ -129,6 +168,8 @@ pub fn assemble_rhs(
     proj_targets: &[(f32, f32, f32)],
     elements: &ElementData,
     coord: usize,
+    bending: Option<&BendingData>,
+    bending_targets: Option<&[(f32, f32, f32, f32)]>,
 ) -> Vec<f32> {
     let inv_dt2 = 1.0 / (dt * dt);
     let mut rhs = vec![0.0_f32; n];
@@ -138,7 +179,7 @@ pub fn assemble_rhs(
         rhs[i] += mass[i] * inv_dt2 * pred[i];
     }
 
-    // Stiffness term: Σ wᵢ Sᵢᵀ pᵢ
+    // Membrane stiffness term: Σ wᵢ Sᵢᵀ pᵢ
     // Same gradient operator as the system matrix.
     // Sᵢᵀpᵢ scatters the projection target back to global vertices.
     for (e, elem) in elements.elements.iter().enumerate() {
@@ -176,6 +217,28 @@ pub fn assemble_rhs(
         for a_idx in 0..3 {
             let contrib = g[a_idx][0] * f_target_0 + g[a_idx][1] * f_target_1;
             rhs[idx[a_idx]] += w * contrib;
+        }
+    }
+
+    // Bending stiffness term: Σ wᵇⱼ Lⱼᵀ pᵇⱼ
+    // Uses the same Laplacian stencil as the system matrix.
+    if let (Some(bend), Some(targets)) = (bending, bending_targets) {
+        let stencil = [-1.0_f32, -1.0, 1.0, 1.0];
+
+        for (e, elem) in bend.elements.iter().enumerate() {
+            let idx = [elem.v0, elem.v1, elem.wing_a, elem.wing_b];
+            let w = elem.weight;
+
+            let target = [targets[e].0, targets[e].1, targets[e].2, targets[e].3];
+
+            // Lᵀ pᵇ: for each vertex, accumulate w * L[i] * dot(L, target)
+            let l_dot_target: f32 = (0..4)
+                .map(|k| stencil[k] * target[k])
+                .sum();
+
+            for i in 0..4 {
+                rhs[idx[i]] += w * stencil[i] * l_dot_target;
+            }
         }
     }
 

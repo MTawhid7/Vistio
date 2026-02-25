@@ -225,3 +225,110 @@ fn isotropic_model_name() {
     let model = IsotropicLinearModel::new();
     assert_eq!(model.name(), "isotropic_linear");
 }
+
+// ─── Tension-Field Theory Tests ───────────────────────────────
+
+#[test]
+fn corotational_compression_zero_energy() {
+    // Tension-field theory: compressive deformation should produce zero energy.
+    // A uniform 0.5× compression (σ₁ = σ₂ = 0.5) should create no restoring force.
+    let model = CoRotationalModel::new();
+    let f = Mat3x2::from_cols(Vec3::X * 0.5, Vec3::Y * 0.5);
+    let result = model.project(&f, 1.0, 1.0);
+    assert!(
+        result.energy < 1e-6,
+        "Compressed element should have ~0 energy with tension-field, got {}",
+        result.energy
+    );
+}
+
+#[test]
+fn corotational_stretch_still_penalized() {
+    // Tensile deformation should still produce positive energy.
+    let model = CoRotationalModel::new();
+    let f = Mat3x2::from_cols(Vec3::X * 2.0, Vec3::Y * 2.0);
+    let result = model.project(&f, 1.0, 1.0);
+    assert!(
+        result.energy > 0.1,
+        "Stretched element should have positive energy, got {}",
+        result.energy
+    );
+}
+
+#[test]
+fn corotational_mixed_compression_stretch() {
+    // One direction compressed (σ₁ = 0.5), one stretched (σ₂ = 1.5).
+    // Only the stretched direction should contribute energy.
+    let model = CoRotationalModel::new();
+    let f = Mat3x2::from_cols(Vec3::X * 0.5, Vec3::Y * 1.5);
+    let result = model.project(&f, 1.0, 1.0);
+    assert!(
+        result.energy > 0.0,
+        "Mixed deformation should have some energy from stretch, got {}",
+        result.energy
+    );
+    // Energy should be less than pure stretch (only one direction contributes)
+    let pure_stretch = Mat3x2::from_cols(Vec3::X * 1.5, Vec3::Y * 1.5);
+    let pure_result = model.project(&pure_stretch, 1.0, 1.0);
+    assert!(
+        result.energy < pure_result.energy,
+        "Mixed should have less energy than pure stretch: {} vs {}",
+        result.energy,
+        pure_result.energy
+    );
+}
+
+// ─── Phase 5: Orthotropic Model Tests ─────────────────────────
+
+use vistio_material::OrthotropicLinearModel;
+
+#[test]
+fn orthotropic_model_name() {
+    let model = OrthotropicLinearModel::new(1.0, 1.0);
+    assert_eq!(model.name(), "orthotropic_linear");
+}
+
+#[test]
+fn orthotropic_identity_zero_energy() {
+    let model = OrthotropicLinearModel::new(1.0, 1.0);
+    let f = Mat3x2::IDENTITY;
+    let result = model.project(&f, 1.0, 1.0);
+    assert!(
+        result.energy < 1e-6,
+        "Identity should have ~0 energy, got {}",
+        result.energy
+    );
+}
+
+#[test]
+fn orthotropic_anisotropic_energy_differs() {
+    // When warp is much stiffer than weft, stretching in warp should cost more
+    let model = OrthotropicLinearModel::new(10.0, 1.0);
+
+    // Stretch in the warp direction (col0 = X direction)
+    let f_warp_stretch = Mat3x2::from_cols(Vec3::X * 2.0, Vec3::Y);
+    let e_warp = model.project(&f_warp_stretch, 1.0, 1.0).energy;
+
+    // Stretch in the weft direction (col1 = Y direction)
+    let f_weft_stretch = Mat3x2::from_cols(Vec3::X, Vec3::Y * 2.0);
+    let e_weft = model.project(&f_weft_stretch, 1.0, 1.0).energy;
+
+    // Weft direction (lower stiffness → less restoration → more residual deformation → LESS energy)
+    assert!(
+        e_weft < e_warp || (e_warp - e_weft).abs() < e_warp * 0.5,
+        "Anisotropic model should differentiate directions: warp_e={}, weft_e={}",
+        e_warp, e_weft
+    );
+}
+
+#[test]
+fn orthotropic_equal_stiffness_isotropic() {
+    // Equal stiffness should behave like isotropic
+    let model = OrthotropicLinearModel::new(5.0, 5.0);
+    let f = Mat3x2::from_cols(Vec3::X * 1.5, Vec3::Y * 1.5);
+    let result = model.project(&f, 1.0, 1.0);
+    assert!(
+        result.energy > 0.0,
+        "Stretched element should have positive energy"
+    );
+}

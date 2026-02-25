@@ -36,6 +36,12 @@ pub struct SolverConfig {
     /// Chebyshev spectral radius estimate (0.0–1.0).
     pub spectral_radius: f32,
 
+    /// Rayleigh mass-proportional damping coefficient (α_M).
+    /// Controls velocity-proportional damping that dissipates high-frequency
+    /// oscillations at boundary vertices (corner twist, edge rattle).
+    /// 0.0 = no Rayleigh damping, 2.0–5.0 = typical for cloth.
+    pub rayleigh_mass_damping: f32,
+
     /// Optional material name (from MaterialDatabase). When set, the solver
     /// uses material-aware initialization with the corresponding FabricProperties.
     pub material_name: Option<String>,
@@ -53,6 +59,7 @@ impl Default for SolverConfig {
             contact_weight: 1.0,
             chebyshev_acceleration: false,
             spectral_radius: 0.5,
+            rayleigh_mass_damping: 2.0,
             material_name: None,
         }
     }

@@ -9,17 +9,34 @@
 //!
 //! Each phase is a pluggable trait, enabling different strategies
 //! (e.g., spatial hash for self-collision, BVH for cloth-body).
+//!
+//! ## Pipeline
+//!
+//! The [`CollisionPipeline`] orchestrates all three phases and optional
+//! ground plane collision into a single `step()` call.
 
 pub mod broad;
+pub mod collision_pipeline;
+pub mod coloring;
 pub mod contact;
+pub mod exclusion;
+pub mod ground_plane;
 pub mod narrow;
 pub mod projection;
 pub mod response;
+pub mod self_collision;
 pub mod spatial_hash;
+pub mod vertex_triangle;
 
 pub use broad::BroadPhase;
+pub use collision_pipeline::CollisionPipeline;
+pub use coloring::CollisionColoring;
 pub use contact::{ContactPair, ContactType};
+pub use exclusion::TopologyExclusion;
+pub use ground_plane::GroundPlane;
 pub use narrow::NarrowPhase;
 pub use projection::ProjectionContactResponse;
 pub use response::ContactResponse;
+pub use self_collision::SelfCollisionSystem;
 pub use spatial_hash::SpatialHash;
+pub use vertex_triangle::VertexTriangleTest;

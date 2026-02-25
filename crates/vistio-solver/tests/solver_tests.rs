@@ -337,7 +337,7 @@ fn assembly_matrix_is_square_n() {
     let mass = vec![0.01_f32; n];
     let dt = 1.0 / 60.0;
 
-    let matrix = assemble_system_matrix(n, &mass, dt, &elements);
+    let matrix = assemble_system_matrix(n, &mass, dt, &elements, None);
     assert_eq!(matrix.rows, n);
     assert_eq!(matrix.cols, n);
 }
@@ -351,7 +351,7 @@ fn assembly_diagonal_positive() {
     let mass = vec![0.01_f32; n];
     let dt = 1.0 / 60.0;
 
-    let matrix = assemble_system_matrix(n, &mass, dt, &elements);
+    let matrix = assemble_system_matrix(n, &mass, dt, &elements, None);
 
     for i in 0..n {
         let mut diag = 0.0_f32;
@@ -378,7 +378,7 @@ fn assembly_rhs_length() {
     let pred = vec![0.0_f32; n];
     let proj = vec![(0.0_f32, 0.0, 0.0); elements.len()];
 
-    let rhs = assemble_rhs(n, &mass, dt, &pred, &proj, &elements, 0);
+    let rhs = assemble_rhs(n, &mass, dt, &pred, &proj, &elements, 0, None, None);
     assert_eq!(rhs.len(), n);
 }
 
@@ -689,4 +689,82 @@ fn material_config_name_roundtrip() {
     let toml_str = toml::to_string(&config).unwrap();
     let recovered: SolverConfig = toml::from_str(&toml_str).unwrap();
     assert_eq!(recovered.material_name.as_deref(), Some("silk_charmeuse"));
+}
+
+// ─── Phase 1 Fix Tests ───────────────────────────────────────
+
+#[test]
+fn bending_flat_rest_angles_exactly_pi() {
+    // After clamping, all rest angles on a flat grid should be exactly π.
+    let mesh = quad_grid(5, 5, 1.0, 1.0);
+    let topo = Topology::build(&mesh);
+    let bending = BendingData::from_topology(&mesh, &topo, 1.0);
+
+    for elem in &bending.elements {
+        assert_eq!(
+            elem.rest_angle,
+            std::f32::consts::PI,
+            "Flat mesh rest angle should be exactly π, got {}",
+            elem.rest_angle
+        );
+    }
+}
+
+#[test]
+fn solver_rayleigh_damping_reduces_ke() {
+    // Rayleigh damping should reduce kinetic energy faster than without it.
+    let mesh = quad_grid(5, 5, 1.0, 1.0);
+    let topo = Topology::build(&mesh);
+    let n = mesh.vertex_count();
+    let pinned = vec![false; n];
+    let dt = 1.0 / 60.0;
+
+    // Run without Rayleigh damping
+    let ke_no_rayleigh = {
+        let config = SolverConfig {
+            max_iterations: 3,
+            rayleigh_mass_damping: 0.0,
+            ..Default::default()
+        };
+        let mut state = SimulationState::from_mesh(&mesh, 0.01, &pinned).unwrap();
+        let mut solver = ProjectiveDynamicsSolver::new();
+        solver.init(&mesh, &topo, &config).unwrap();
+        for _ in 0..20 {
+            solver.step(&mut state, dt).unwrap();
+        }
+        state.kinetic_energy()
+    };
+
+    // Run with Rayleigh damping
+    let ke_with_rayleigh = {
+        let config = SolverConfig {
+            max_iterations: 3,
+            rayleigh_mass_damping: 5.0,
+            ..Default::default()
+        };
+        let mut state = SimulationState::from_mesh(&mesh, 0.01, &pinned).unwrap();
+        let mut solver = ProjectiveDynamicsSolver::new();
+        solver.init(&mesh, &topo, &config).unwrap();
+        for _ in 0..20 {
+            solver.step(&mut state, dt).unwrap();
+        }
+        state.kinetic_energy()
+    };
+
+    assert!(
+        ke_with_rayleigh < ke_no_rayleigh,
+        "Rayleigh damping should reduce KE: with={:.6} vs without={:.6}",
+        ke_with_rayleigh, ke_no_rayleigh
+    );
+}
+
+#[test]
+fn config_rayleigh_serialization() {
+    let config = SolverConfig {
+        rayleigh_mass_damping: 3.5,
+        ..Default::default()
+    };
+    let toml_str = toml::to_string(&config).unwrap();
+    let recovered: SolverConfig = toml::from_str(&toml_str).unwrap();
+    assert!((recovered.rayleigh_mass_damping - 3.5).abs() < 1e-6);
 }

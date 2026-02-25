@@ -236,3 +236,253 @@ fn ab_benchmark_pd_vs_stub() {
     assert_eq!(stub.name(), "projective_dynamics_stub");
     assert_eq!(pd.name(), "ProjectiveDynamics");
 }
+
+// ─── Phase 2: Collision Pipeline Tests ────────────────────────
+
+use vistio_contact::collision_pipeline::CollisionPipeline;
+use vistio_contact::ground_plane::GroundPlane;
+use vistio_contact::vertex_triangle::VertexTriangleTest;
+
+#[test]
+fn ground_plane_prevents_penetration() {
+    let mesh = quad_grid(4, 4, 1.0, 1.0);
+    let n = mesh.vertex_count();
+    let pinned = vec![false; n];
+    let mut state = SimulationState::from_mesh(&mesh, 0.01, &pinned).unwrap();
+
+    // Push all vertices below the ground plane
+    for i in 0..n {
+        state.pos_y[i] = -1.0;
+        state.vel_y[i] = -5.0;
+    }
+
+    let ground = GroundPlane::new(0.0);
+    let result = ground.resolve(&mut state);
+
+    assert_eq!(result.resolved_count, n as u32);
+    assert!(result.max_residual_penetration > 0.0);
+
+    // All vertices should be at or above ground
+    for i in 0..n {
+        assert!(
+            state.pos_y[i] >= 0.0,
+            "Vertex {} should be at or above ground, got {}",
+            i, state.pos_y[i]
+        );
+    }
+
+    // Downward velocity should be zeroed
+    for i in 0..n {
+        assert!(
+            state.vel_y[i] >= 0.0,
+            "Vertex {} should have non-negative vel_y, got {}",
+            i, state.vel_y[i]
+        );
+    }
+}
+
+#[test]
+fn ground_plane_no_correction_above() {
+    let mesh = quad_grid(2, 2, 1.0, 1.0);
+    let n = mesh.vertex_count();
+    let pinned = vec![false; n];
+    let mut state = SimulationState::from_mesh(&mesh, 0.01, &pinned).unwrap();
+
+    // All vertices above the ground
+    for i in 0..n {
+        state.pos_y[i] = 5.0;
+    }
+
+    let ground = GroundPlane::new(0.0);
+    let result = ground.resolve(&mut state);
+
+    assert_eq!(result.resolved_count, 0);
+}
+
+#[test]
+fn collision_pipeline_runs_end_to_end() {
+    let mesh = quad_grid(4, 4, 1.0, 1.0);
+    let n = mesh.vertex_count();
+    let pinned = vec![false; n];
+    let state = SimulationState::from_mesh(&mesh, 0.01, &pinned).unwrap();
+
+    let broad = Box::new(NullBroadPhase);
+    let narrow = Box::new(NullNarrowPhase);
+    let response = Box::new(NullContactResponse);
+
+    let mut pipeline = CollisionPipeline::new(
+        broad,
+        narrow,
+        response,
+        mesh,
+        0.01,
+        1.0,
+    );
+
+    let mut state = state;
+    let result = pipeline.step(&mut state);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn collision_pipeline_with_ground() {
+    let mesh = quad_grid(4, 4, 1.0, 1.0);
+    let n = mesh.vertex_count();
+    let pinned = vec![false; n];
+    let mut state = SimulationState::from_mesh(&mesh, 0.01, &pinned).unwrap();
+
+    // Push vertices below ground
+    for i in 0..n {
+        state.pos_y[i] = -2.0;
+    }
+
+    let broad = Box::new(NullBroadPhase);
+    let narrow = Box::new(NullNarrowPhase);
+    let response = Box::new(NullContactResponse);
+
+    let mut pipeline = CollisionPipeline::new(
+        broad,
+        narrow,
+        response,
+        mesh,
+        0.01,
+        1.0,
+    ).with_ground(-1.0);
+
+    let result = pipeline.step(&mut state).unwrap();
+
+    assert!(result.ground_result.resolved_count > 0);
+    // All vertices should be at or above ground (-1.0)
+    for i in 0..n {
+        assert!(
+            state.pos_y[i] >= -1.0,
+            "Vertex {} below ground: {}",
+            i, state.pos_y[i]
+        );
+    }
+}
+
+#[test]
+fn vertex_triangle_test_name() {
+    let vt = VertexTriangleTest;
+    assert_eq!(vt.name(), "vertex_triangle_test");
+}
+
+// ─── Phase 3: Self-Collision Tests ────────────────────────────
+
+use vistio_contact::coloring::CollisionColoring;
+use vistio_contact::exclusion::TopologyExclusion;
+use vistio_contact::self_collision::SelfCollisionSystem;
+
+#[test]
+fn topology_exclusion_excludes_adjacent() {
+    let mesh = quad_grid(4, 4, 1.0, 1.0);
+    let topo = Topology::build(&mesh);
+    let exclusion = TopologyExclusion::new(&mesh, &topo, 2);
+
+    // Adjacent vertices should be excluded (2-ring)
+    assert!(
+        exclusion.should_exclude(0, 1),
+        "Adjacent vertices should be excluded"
+    );
+
+    // Same vertex should be excluded
+    assert!(
+        exclusion.should_exclude(0, 0),
+        "Same vertex should be excluded"
+    );
+}
+
+#[test]
+fn topology_exclusion_allows_distant() {
+    let mesh = quad_grid(10, 10, 1.0, 1.0);
+    let topo = Topology::build(&mesh);
+    let exclusion = TopologyExclusion::new(&mesh, &topo, 2);
+
+    // Vertices far apart should NOT be excluded
+    // vertex 0 is at (0,0), vertex at far corner is distant
+    let far_vertex = mesh.vertex_count() - 1;
+    assert!(
+        !exclusion.should_exclude(0, far_vertex),
+        "Distant vertices should not be excluded"
+    );
+}
+
+#[test]
+fn graph_coloring_no_conflicts() {
+    // Create pairs that share vertices — coloring should separate them
+    let pairs = vec![(0, 1), (1, 2), (2, 3), (3, 4)];
+    let (sorted, offsets) = CollisionColoring::color_pairs(&pairs, 5);
+
+    assert_eq!(sorted.len(), pairs.len());
+    assert!(offsets.len() >= 2, "Should have at least one batch");
+
+    // Verify no two pairs in the same batch share a vertex
+    for b in 0..offsets.len() - 1 {
+        let start = offsets[b];
+        let end = offsets[b + 1];
+        let batch = &sorted[start..end];
+
+        for i in 0..batch.len() {
+            for j in (i + 1)..batch.len() {
+                let (a1, b1) = batch[i];
+                let (a2, b2) = batch[j];
+                assert!(
+                    a1 != a2 && a1 != b2 && b1 != a2 && b1 != b2,
+                    "Batch {} has conflicting pairs ({},{}) and ({},{})",
+                    b, a1, b1, a2, b2
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn graph_coloring_empty() {
+    let pairs: Vec<(u32, u32)> = Vec::new();
+    let (sorted, offsets) = CollisionColoring::color_pairs(&pairs, 10);
+    assert!(sorted.is_empty());
+    assert_eq!(offsets, vec![0]);
+}
+
+#[test]
+fn graph_coloring_independent_pairs() {
+    // Non-conflicting pairs — should all be in same batch
+    let pairs = vec![(0, 1), (2, 3), (4, 5)];
+    let (sorted, offsets) = CollisionColoring::color_pairs(&pairs, 6);
+    assert_eq!(sorted.len(), 3);
+    // Should be only 1 batch since there are no conflicts
+    assert_eq!(offsets.len(), 2);
+    assert_eq!(offsets[0], 0);
+    assert_eq!(offsets[1], 3);
+}
+
+#[test]
+fn self_collision_resolves_overlap() {
+    let mesh = quad_grid(4, 4, 1.0, 1.0);
+    let topo = Topology::build(&mesh);
+    let n = mesh.vertex_count();
+    let pinned = vec![false; n];
+    let mut state = SimulationState::from_mesh(&mesh, 0.01, &pinned).unwrap();
+
+    // Push two non-adjacent vertices very close together
+    // Vertices 0 (corner) and the far corner should not be topologically adjacent
+    let far = n - 1;
+    state.pos_x[0] = 0.0;
+    state.pos_y[0] = 0.0;
+    state.pos_z[0] = 0.0;
+    state.pos_x[far] = 0.001;
+    state.pos_y[far] = 0.0;
+    state.pos_z[far] = 0.0;
+
+    let mut system = SelfCollisionSystem::new(&mesh, &topo, 2, 0.1, 1.0);
+    let mut broad = SpatialHash::new(0.2);
+
+    let result = system.solve(&mut state, &mut broad);
+
+    // Should have detected the pair and resolved it
+    assert!(
+        result.candidate_pairs > 0,
+        "Should have candidate pairs from broad phase"
+    );
+}

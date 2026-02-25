@@ -115,6 +115,18 @@ impl BendingData {
 
             let rest_angle = compute_dihedral_angle(p_v0, p_v1, p_wa, p_wb);
 
+            // Clamp near-flat rest angles to exactly 0 or π.
+            // Floating-point errors can produce rest angles like 3.14148 instead of π,
+            // which creates small but persistent restoring forces on boundary vertices
+            // with few constraints — causing visible corner twisting and edge curling.
+            let rest_angle = if (rest_angle - std::f32::consts::PI).abs() < 1e-3 {
+                std::f32::consts::PI
+            } else if rest_angle.abs() < 1e-3 {
+                0.0
+            } else {
+                rest_angle
+            };
+
             // Weight based on edge length (longer edges = more influence)
             let edge_len = (p_v1 - p_v0).length();
             let weight = stiffness * edge_len;

@@ -2,6 +2,7 @@
 
 use std::time::Instant;
 
+use vistio_contact::CollisionPipeline;
 use vistio_material::CoRotationalModel;
 use vistio_mesh::topology::Topology;
 use vistio_solver::pd_solver::ProjectiveDynamicsSolver;
@@ -23,6 +24,18 @@ impl BenchmarkRunner {
     pub fn run(
         scenario: &Scenario,
         solver: &mut ProjectiveDynamicsSolver,
+    ) -> VistioResult<BenchmarkMetrics> {
+        Self::run_with_collision(scenario, solver, None)
+    }
+
+    /// Run a scenario with an optional collision pipeline.
+    ///
+    /// When a `CollisionPipeline` is provided, it is called after each solver
+    /// step to detect and resolve contacts before the next timestep.
+    pub fn run_with_collision(
+        scenario: &Scenario,
+        solver: &mut ProjectiveDynamicsSolver,
+        mut collision: Option<CollisionPipeline>,
     ) -> VistioResult<BenchmarkMetrics> {
         let topology = Topology::build(&scenario.garment);
 
@@ -63,9 +76,15 @@ impl BenchmarkRunner {
 
         // Run timesteps
         for _ in 0..scenario.timesteps {
+            // Solver step (PD local-global iterations)
             let result: StepResult = solver.step(&mut state, scenario.dt)?;
             step_times.push(result.wall_time);
             total_iterations += result.iterations;
+
+            // Collision step (after solver resolves elastic forces)
+            if let Some(ref mut pipeline) = collision {
+                let _ = pipeline.step(&mut state)?;
+            }
         }
 
         let total_wall_time = total_start.elapsed().as_secs_f64();

@@ -168,7 +168,8 @@ fn vertex_triangle_adjacency() {
     let mesh = quad_grid(2, 2, 1.0, 1.0);
     let topo = Topology::build(&mesh);
     let center = 4;
-    assert_eq!(topo.vertex_triangles[center].len(), 6);
+    // In checkerboard triangulation, center vertex touches 4 triangles
+    assert_eq!(topo.vertex_triangles[center].len(), 4);
 }
 
 #[test]
@@ -177,7 +178,8 @@ fn one_ring() {
     let topo = Topology::build(&mesh);
     let center = 4u32;
     let ring = topo.one_ring(center, &mesh);
-    assert_eq!(ring.len(), 6);
+    // In checkerboard triangulation, center vertex has 4 neighbors
+    assert_eq!(ring.len(), 4);
 }
 
 #[test]

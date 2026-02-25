@@ -99,9 +99,14 @@ impl ProjectiveDynamicsSolver {
         // Compute area-weighted lumped mass matrix
         self.mass = compute_lumped_masses(self.n, &elements, properties.density);
 
-        // Assemble the constant system matrix
+        // Build bending elements with material-derived stiffness
+        // (must be done before system matrix assembly so bending stiffness is included)
+        let bending = BendingData::from_topology_with_material(mesh, topology, properties);
+        self.bending = Some(bending);
+
+        // Assemble the constant system matrix (includes bending stiffness)
         let dt = 1.0 / 60.0;
-        let system_matrix = assemble_system_matrix(self.n, &self.mass, dt, &elements);
+        let system_matrix = assemble_system_matrix(self.n, &self.mass, dt, &elements, self.bending.as_ref());
 
         // Prefactor via sparse Cholesky
         self.solver.factorize(&system_matrix).map_err(|e| {
@@ -109,10 +114,6 @@ impl ProjectiveDynamicsSolver {
         })?;
 
         self.elements = Some(elements);
-
-        // Build bending elements with material-derived stiffness
-        let bending = BendingData::from_topology_with_material(mesh, topology, properties);
-        self.bending = Some(bending);
 
         // Store the constitutive model for the local step
         self.material_model = Some(model);
@@ -145,9 +146,14 @@ impl SolverStrategy for ProjectiveDynamicsSolver {
         let density = 200.0;
         self.mass = compute_lumped_masses(self.n, &elements, density);
 
-        // Assemble the constant system matrix
+        // Build bending elements from topology
+        // (must be done before system matrix assembly so bending stiffness is included)
+        let bending = BendingData::from_topology(mesh, topology, config.bending_weight * 100.0);
+        self.bending = Some(bending);
+
+        // Assemble the constant system matrix (includes bending stiffness)
         let dt = 1.0 / 60.0; // Default timestep for prefactoring
-        let system_matrix = assemble_system_matrix(self.n, &self.mass, dt, &elements);
+        let system_matrix = assemble_system_matrix(self.n, &self.mass, dt, &elements, self.bending.as_ref());
 
         // Prefactor via sparse Cholesky
         self.solver.factorize(&system_matrix).map_err(|e| {
@@ -155,10 +161,6 @@ impl SolverStrategy for ProjectiveDynamicsSolver {
         })?;
 
         self.elements = Some(elements);
-
-        // Build bending elements from topology
-        let bending = BendingData::from_topology(mesh, topology, config.bending_weight * 100.0);
-        self.bending = Some(bending);
 
         // No material model in Tier 1 mode — uses hardcoded ARAP
         self.material_model = None;
@@ -235,13 +237,13 @@ impl SolverStrategy for ProjectiveDynamicsSolver {
             // === GLOBAL STEP ===
             // Assemble RHS for each coordinate
             let rhs_x = assemble_rhs(
-                n, &self.mass, dt, &state.pred_x, &proj_x, elements, 0,
+                n, &self.mass, dt, &state.pred_x, &proj_x, elements, 0, None, None,
             );
             let rhs_y = assemble_rhs(
-                n, &self.mass, dt, &state.pred_y, &proj_y, elements, 1,
+                n, &self.mass, dt, &state.pred_y, &proj_y, elements, 1, None, None,
             );
             let rhs_z = assemble_rhs(
-                n, &self.mass, dt, &state.pred_z, &proj_z, elements, 2,
+                n, &self.mass, dt, &state.pred_z, &proj_z, elements, 2, None, None,
             );
 
             // Solve A * q = rhs (three backsubstitutions)
@@ -327,8 +329,22 @@ impl SolverStrategy for ProjectiveDynamicsSolver {
         // 5. Update velocities from position difference
         state.update_velocities(dt);
 
-        // 6. Apply damping
+        // 6. Apply basic damping
         state.damp_velocities(self.config.damping);
+
+        // 7. Rayleigh mass-proportional damping: v *= 1 / (1 + α_M * dt)
+        // Dissipates high-frequency oscillations at boundary vertices
+        // (corner twist, edge rattle) by acting as "internal thread friction".
+        if self.config.rayleigh_mass_damping > 0.0 {
+            let factor = 1.0 / (1.0 + self.config.rayleigh_mass_damping * dt);
+            for i in 0..n {
+                if state.inv_mass[i] > 0.0 {
+                    state.vel_x[i] *= factor;
+                    state.vel_y[i] *= factor;
+                    state.vel_z[i] *= factor;
+                }
+            }
+        }
 
         let wall_time = start.elapsed().as_secs_f64();
 

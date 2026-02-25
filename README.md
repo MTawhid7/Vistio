@@ -25,9 +25,9 @@ Built in Rust with a modular crate architecture, Vistio targets production-grade
 - **Core types** — Strongly-typed IDs, error handling, physical constants
 - **Linear algebra** — 3×2 deformation gradients, polar decomposition, CSR sparse matrices
 - **Mesh system** — SoA TriangleMesh, procedural generators (quad grid, UV sphere), topology queries, vertex normals
-- **Materials** — ConstitutiveModel trait, FabricProperties (KES-mapped), 5 built-in presets
-- **Solver** — Projective Dynamics robust local-global solver, prefactored Cholesky (`faer`), ARAP co-rotational elements, dihedral bending
-- **Contact** — Spatial hash broad phase (O(n)), projection contact response, pluggable traits
+- **Materials** — ConstitutiveModel trait, FabricProperties (KES-mapped), 5 built-in presets, `OrthotropicLinearModel` (anisotropic), tension-field strain limiting
+- **Solver** — Projective Dynamics robust local-global solver, prefactored Cholesky (`faer`), ARAP co-rotational elements, integrated dihedral bending system matrix, Rayleigh damping
+- **Contact** — Unified collision pipeline (spatial hash broad phase, vertex-triangle narrow phase, projection response, ground plane), robust 3-phase self-collision (topology exclusion, greedy batch coloring)
 - **GPU abstraction** — GpuBackend trait, CpuFallback (axpy, dot, fill), ComputeBuffer
 - **Telemetry** — EventBus (mpsc), 7 event types, pluggable sinks
 - **Debug** — InspectionHook trait, state snapshots with bincode serialization
