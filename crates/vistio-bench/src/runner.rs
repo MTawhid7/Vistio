@@ -9,6 +9,7 @@ use vistio_solver::pd_solver::ProjectiveDynamicsSolver;
 use vistio_solver::state::SimulationState;
 use vistio_solver::strategy::{SolverStrategy, StepResult};
 use vistio_types::VistioResult;
+use vistio_contact::{SpatialHash, VertexTriangleTest, ProjectionContactResponse};
 
 use crate::metrics::BenchmarkMetrics;
 use crate::scenarios::Scenario;
@@ -25,7 +26,29 @@ impl BenchmarkRunner {
         scenario: &Scenario,
         solver: &mut ProjectiveDynamicsSolver,
     ) -> VistioResult<BenchmarkMetrics> {
-        Self::run_with_collision(scenario, solver, None)
+        use crate::scenarios::ScenarioKind;
+
+        let mut pipeline = CollisionPipeline::new(
+            Box::new(SpatialHash::new(0.05)),
+            Box::new(VertexTriangleTest),
+            Box::new(ProjectionContactResponse),
+            scenario.garment.clone(),
+            0.01, // thickness
+            1.0,  // stiffness
+        ).with_ground(-0.3);
+
+        match scenario.kind {
+            ScenarioKind::SphereDrape => {
+                pipeline = pipeline.with_sphere(vistio_math::Vec3::new(0.0, 0.0, 0.0), 0.3);
+            },
+            ScenarioKind::SelfFold => {
+                let topology = Topology::build(&scenario.garment);
+                pipeline = pipeline.with_self_collision(&topology, 2);
+            },
+            _ => {}
+        }
+
+        Self::run_with_collision(scenario, solver, Some(pipeline))
     }
 
     /// Run a scenario with an optional collision pipeline.

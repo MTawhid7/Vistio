@@ -35,10 +35,17 @@ impl GroundPlane {
             let depth = self.height - state.pos_y[i];
             if depth > 0.0 {
                 state.pos_y[i] = self.height;
-                // Also zero out downward velocity
+
+                // Apply simple kinetic friction to tangential velocities
+                state.vel_x[i] *= 0.5;
+                state.vel_z[i] *= 0.5;
+
+                // Perfectly inelastic impulse against the floor:
+                // If the vertex is moving downwards (into the floor), stop it.
                 if state.vel_y[i] < 0.0 {
                     state.vel_y[i] = 0.0;
                 }
+
                 resolved += 1;
                 max_penetration = max_penetration.max(depth);
                 total_force += depth;

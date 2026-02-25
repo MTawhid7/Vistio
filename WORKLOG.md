@@ -192,6 +192,8 @@ The simulation's environment collision pipelines (ground, sphere) are now fully 
 - [ ] Implement `WgpuBackend` for GPU-accelerated compute
 
 <!-- TEMPLATE: Copy the block below for each new day -->
+
+<!--
 ## YYYY-MM-DD
 
 ### Current State

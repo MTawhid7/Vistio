@@ -15,6 +15,7 @@ use vistio_solver::state::SimulationState;
 use vistio_solver::strategy::SolverStrategy;
 use vistio_mesh::topology::Topology;
 use vistio_material::CoRotationalModel;
+use vistio_contact::{CollisionPipeline, SpatialHash, VertexTriangleTest, ProjectionContactResponse};
 
 /// System resource holding the Vistio simulation state.
 #[derive(Resource)]
@@ -24,6 +25,12 @@ struct SimRunner {
     dt: f32,
     current_step: u32,
     indices: Vec<u32>, // Flat array of [i0, i1, i2, ...]
+    collision: Option<CollisionPipeline>,
+}
+
+#[derive(Resource)]
+struct SceneData {
+    body: Option<vistio_mesh::TriangleMesh>,
 }
 
 /// Component to tag the Bevy cloth entity.
@@ -38,7 +45,7 @@ pub fn launch_viewer(scenario: Scenario) -> Result<(), Box<dyn std::error::Error
     let topology = Topology::build(&scenario.garment);
     let mut solver = ProjectiveDynamicsSolver::new();
 
-    let vertex_mass = if let Some(ref properties) = scenario.material {
+    let vertex_mass: f32 = if let Some(ref properties) = scenario.material {
         let model = Box::new(CoRotationalModel::new());
         solver.init_with_material(
             &scenario.garment,
@@ -75,12 +82,36 @@ pub fn launch_viewer(scenario: Scenario) -> Result<(), Box<dyn std::error::Error
         &scenario.pinned,
     ).map_err(|e| format!("State init failed: {e}"))?;
 
+    let mut pipeline = CollisionPipeline::new(
+        Box::new(SpatialHash::new(0.05)),
+        Box::new(VertexTriangleTest),
+        Box::new(ProjectionContactResponse),
+        scenario.garment.clone(),
+        0.01,
+        1.0,
+    ).with_ground(-0.3);
+
+    match scenario.kind {
+        vistio_bench::scenarios::ScenarioKind::SphereDrape => {
+            pipeline = pipeline.with_sphere(vistio_math::Vec3::new(0.0, 0.0, 0.0), 0.3);
+        },
+        vistio_bench::scenarios::ScenarioKind::SelfFold => {
+            pipeline = pipeline.with_self_collision(&topology, 2);
+        },
+        _ => {}
+    }
+
     let runner = SimRunner {
         solver,
         state,
         dt: scenario.dt,
         current_step: 0,
         indices: scenario.garment.indices.clone(),
+        collision: Some(pipeline),
+    };
+
+    let scene_data = SceneData {
+        body: scenario.body.clone(),
     };
 
     let mut app = App::new();
@@ -95,6 +126,7 @@ pub fn launch_viewer(scenario: Scenario) -> Result<(), Box<dyn std::error::Error
     app.add_plugins(PanOrbitCameraPlugin);
 
     app.insert_resource(runner);
+    app.insert_resource(scene_data);
     app.insert_resource(ClearColor(Color::srgb(0.05, 0.05, 0.08))); // Dark background
 
     // Setup scene
@@ -168,7 +200,7 @@ fn simulate_cloth(
     let dt = runner.dt;
 
     // Borrow parts independently
-    let SimRunner { ref mut solver, ref mut state, .. } = *runner;
+    let SimRunner { ref mut solver, ref mut state, ref mut collision, .. } = *runner;
 
     let _result = match solver.step(state, dt) {
         Ok(res) => res,
@@ -177,6 +209,11 @@ fn simulate_cloth(
             return;
         }
     };
+
+    if let Some(ref mut pipeline) = collision {
+        let _ = pipeline.step(state);
+    }
+
     runner.current_step += 1;
 
     let n = runner.state.vertex_count;
@@ -211,6 +248,7 @@ fn setup_scene(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     runner: Res<SimRunner>,
+    scene_data: Res<SceneData>,
 ) {
     // 1. Setup Initial Mesh
     let n = runner.state.vertex_count;
@@ -256,6 +294,7 @@ fn setup_scene(
             material: cloth_material,
             ..default()
         },
+        bevy::render::view::NoFrustumCulling,
         ClothMesh,
     ));
 
@@ -269,9 +308,44 @@ fn setup_scene(
     commands.spawn(PbrBundle {
         mesh: meshes.add(Cuboid::new(4.0, 0.05, 4.0)),
         material: ground_material,
-        transform: Transform::from_xyz(0.0, -1.0, 0.0),
+        transform: Transform::from_xyz(0.0, -0.325, 0.0), // top face at Y = -0.3
         ..default()
     });
+
+    // 2.5. Setup Body (e.g. Sphere) if present
+    if let Some(ref body) = scene_data.body {
+        let n_body = body.vertex_count();
+        let mut body_positions = Vec::with_capacity(n_body);
+        let mut body_uvs = Vec::with_capacity(n_body);
+
+        for i in 0..n_body {
+            body_positions.push([body.pos_x[i], body.pos_y[i], body.pos_z[i]]);
+            body_uvs.push([0.0_f32, 0.0_f32]);
+        }
+
+        let body_normals = compute_smooth_normals(&body.pos_x, &body.pos_y, &body.pos_z, &body.indices);
+
+        let mut body_mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            Default::default(),
+        );
+        body_mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, body_positions);
+        body_mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, body_normals);
+        body_mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, body_uvs);
+        body_mesh.insert_indices(Indices::U32(body.indices.clone()));
+
+        let body_material = materials.add(StandardMaterial {
+            base_color: Color::srgb(0.7, 0.7, 0.7),
+            perceptual_roughness: 0.6,
+            ..default()
+        });
+
+        commands.spawn(PbrBundle {
+            mesh: meshes.add(body_mesh),
+            material: body_material,
+            ..default()
+        });
+    }
 
     // 3. Setup Directional Light (Sun/Key Light) with Shadows
     commands.spawn(DirectionalLightBundle {

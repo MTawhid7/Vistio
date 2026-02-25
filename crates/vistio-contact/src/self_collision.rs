@@ -156,14 +156,48 @@ impl SelfCollisionSystem {
                 let ratio_i = w_i / w_sum;
                 let ratio_j = w_j / w_sum;
 
-                // Push apart along the normal
-                state.pos_x[i] += nx * correction * ratio_i;
-                state.pos_y[i] += ny * correction * ratio_i;
-                state.pos_z[i] += nz * correction * ratio_i;
+                let dx_i = nx * correction * ratio_i;
+                let dy_i = ny * correction * ratio_i;
+                let dz_i = nz * correction * ratio_i;
 
-                state.pos_x[j] -= nx * correction * ratio_j;
-                state.pos_y[j] -= ny * correction * ratio_j;
-                state.pos_z[j] -= nz * correction * ratio_j;
+                let dx_j = nx * correction * ratio_j;
+                let dy_j = ny * correction * ratio_j;
+                let dz_j = nz * correction * ratio_j;
+
+                // Push apart along the normal
+                state.pos_x[i] += dx_i;
+                state.pos_y[i] += dy_i;
+                state.pos_z[i] += dz_i;
+
+                state.pos_x[j] -= dx_j;
+                state.pos_y[j] -= dy_j;
+                state.pos_z[j] -= dz_j;
+
+                // Calculate relative velocity
+                let v_rel_x = state.vel_x[i] - state.vel_x[j];
+                let v_rel_y = state.vel_y[i] - state.vel_y[j];
+                let v_rel_z = state.vel_z[i] - state.vel_z[j];
+
+                // Approach velocity along the normal
+                let vn = v_rel_x * nx + v_rel_y * ny + v_rel_z * nz;
+
+                // Stop further approach (perfectly inelastic impulse)
+                // Only act if they are moving towards each other
+                if vn < 0.0 {
+                    let impulse_mag = -vn;
+
+                    let dv_x = impulse_mag * nx;
+                    let dv_y = impulse_mag * ny;
+                    let dv_z = impulse_mag * nz;
+
+                    state.vel_x[i] += dv_x * ratio_i;
+                    state.vel_y[i] += dv_y * ratio_i;
+                    state.vel_z[i] += dv_z * ratio_i;
+
+                    state.vel_x[j] -= dv_x * ratio_j;
+                    state.vel_y[j] -= dv_y * ratio_j;
+                    state.vel_z[j] -= dv_z * ratio_j;
+                }
 
                 corrections += 1;
             }

@@ -32,7 +32,7 @@ fn self_fold_setup() {
     let s = Scenario::self_fold();
     assert_eq!(s.kind, ScenarioKind::SelfFold);
     let pinned_count = s.pinned.iter().filter(|&&p| p).count();
-    assert_eq!(pinned_count, 2); // Two corners
+    assert_eq!(pinned_count, 0); // No pins, free fall
 }
 
 #[test]

@@ -108,8 +108,15 @@ impl Scenario {
     /// A 1.5m × 1.5m cloth at 20×20 resolution falls onto
     /// a sphere of radius 0.3m centered at origin.
     pub fn sphere_drape() -> Self {
-        let garment = quad_grid(20, 20, 1.5, 1.5);
+        let mut garment = quad_grid(20, 20, 1.5, 1.5);
         let n = garment.vertex_count();
+
+        // Rotate to XZ plane and elevate: Y = 1.0
+        for i in 0..n {
+            garment.pos_z[i] = garment.pos_y[i];
+            garment.pos_y[i] = 1.0;
+        }
+
         let body = uv_sphere(0.3, 16, 32);
 
         Self {
@@ -132,14 +139,23 @@ impl Scenario {
     pub fn self_fold() -> Self {
         let cols = 20;
         let rows = 10;
-        let garment = quad_grid(cols, rows, 1.0, 0.5);
+        let mut garment = quad_grid(cols, rows, 1.0, 0.5);
         let n = garment.vertex_count();
-        let verts_x = cols + 1;
 
-        // Pin two opposite corners
-        let mut pinned = vec![false; n];
-        pinned[0] = true; // Top-left
-        pinned[verts_x - 1] = true; // Top-right
+        // Orient UV coordinates down the Y-axis so vertex 0 is held high
+        // and the rest form a cone/diamond beneath it.
+        for i in 0..n {
+            let px = garment.pos_x[i];
+            let py = garment.pos_y[i];
+
+            // X and Z spread slightly, Y drops diagonally
+            garment.pos_x[i] = px;
+            garment.pos_y[i] = 1.5 - (px + py) * 0.5;
+            garment.pos_z[i] = py;
+        }
+
+        // No pinning for self fold - drop it from its high point
+        let pinned = vec![false; n];
 
         Self {
             kind: ScenarioKind::SelfFold,

@@ -40,9 +40,27 @@ impl ContactResponse for ProjectionContactResponse {
             let v = contact.indices[0] as usize;
 
             if v < state.vertex_count && state.inv_mass[v] > 0.0 {
-                state.pos_x[v] += contact.normal[0] * correction;
-                state.pos_y[v] += contact.normal[1] * correction;
-                state.pos_z[v] += contact.normal[2] * correction;
+                let dx = contact.normal[0] * correction;
+                let dy = contact.normal[1] * correction;
+                let dz = contact.normal[2] * correction;
+
+                state.pos_x[v] += dx;
+                state.pos_y[v] += dy;
+                state.pos_z[v] += dz;
+
+                // Inelastic collision impulses:
+                // Isolate the velocity along the collision normal
+                let vn = state.vel_x[v] * contact.normal[0]
+                       + state.vel_y[v] * contact.normal[1]
+                       + state.vel_z[v] * contact.normal[2];
+
+                // If moving into the plane (vn < 0), zero out that approach velocity
+                if vn < 0.0 {
+                    state.vel_x[v] -= vn * contact.normal[0];
+                    state.vel_y[v] -= vn * contact.normal[1];
+                    state.vel_z[v] -= vn * contact.normal[2];
+                }
+
                 total_force += correction;
                 resolved += 1;
             }
