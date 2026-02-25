@@ -157,9 +157,41 @@ We have successfully resolved the complex "crumpling," "persistent curling," and
 - [ ] **Tier 3:** Complete Anisotropic (Warp/Weft) material integration across the pipeline
 - [ ] **Tier 3:** Implement Continuous Collision Detection (Edge-Edge/Vertex-Triangle) for guaranteed intersection-free frames
 
-<!-- TEMPLATE: Copy the block below for each new day -->
+---
 
-<!--
+## 2026-02-25 (Update: Collision Stability)
+
+### Current State
+
+**Tier 0–2 Physics & Collision completion (Partially Stabilized).**
+The simulation's environment collision pipelines (ground, sphere) are now fully stable, and the `hanging_sheet` and `sphere_drape` scenarios run perfectly. However, **self-collision is fundamentally flawed and NOT stabilized**. The `self_fold` scenario still exhibits severe anomalies: the cloth frequently penetrates the ground plane visually and physically, and it suffers from persistent "jelly-like" vibrations that the current position-projection resolution fails to stop.
+
+### Progress
+
+- **Physics Fix 1 (Collision Reordering):** Reordered the execution of `CollisionPipeline::step` so that strict infinite analytical barriers (`GroundPlane`, `SphereCollider`) run absolutely *last*, after `SelfCollisionSystem`. This guarantees that self-collision resolution cannot force vertices back under the ground plane.
+- **Physics Fix 2 (Inelastic Impulses):** Removed explicit velocity injections (`vel += dx / dt`) from all collision response modules. These injections were causing an explicit Euler energy-injection loop, making the mesh bounce infinitely and explode. Replaced this with perfectly inelastic relative impulses: we now isolate the relative approach velocity along the collision normal ($v_n = v_{rel} \cdot n$). If vertices are moving toward each other (or into a collider), we apply an equal and opposite correction to precisely zero out that approach velocity, perfectly settling the cloth onto constraints without bouncing.
+- **Visual Alignment Fixes:** Corrected the visual placement of the `sphere_drape` and `self_fold` initial states in Bevy's viewer, ensuring the physics ground perfectly aligns with the rendered floor.
+- **Viewer Rendering Fix:** Added `NoFrustumCulling` to the physical mesh bundle in Bevy so the simulated cloth no longer randomly disappears when panning the camera.
+
+### Key Observations
+
+- **Explicit Euler Energy Injection:** Directly translating position corrections `dx` into velocity `v += dx / dt` mathematically perfectly aligns velocity but, because collisions run outside the PD loop, acts as an uncontrolled Explicit Euler step. For stiff collisions, this injected massive artificial kinetic energy.
+- **Inelastic Damping:** Transitioning to perfectly inelastic normal-velocity damping dropped the kinetic energy of the `self_fold` scenario from violent constants to near zero (`3.81e-9`). The cloth now cleanly settles to a physical rest state.
+
+### Issues & Decisions
+
+- **Issue (Persistent Self-Collision Instability):** The self-collision algorithm natively repels colliding triangles sequentially. While inelastic impulses reduced kinetic explosions, the underlying algorithm (PBD-style explicit projections *outside* the Projective Dynamics local-global loop) causes severe artifacts. When multiple layers stack against the ground (like in `self_fold`), self-collision pushes vertices under the floor, which the ground plane collider then pushes back up, creating an endless, high-frequency "jelly-like" vibration cycle and allowing visual/physical ground penetration.
+- **Decision:** Use strictly perfectly inelastic impulses (`v -= v_n * n` when `v_n < 0`) for positional collision bounds rather than explicit velocity synchronization or restitution bouncing, to ensure maximum stability and rapid settling for isolated obstacles.
+- **Observation:** Bevy's default AABB-based frustum culling fails for meshes updated exclusively via CPU vertex-buffer mutation unless the AABB is manually recalculated every frame. Bypassing culling entirely via `NoFrustumCulling` is a fast and stable workaround.
+
+### Next Steps
+
+- [ ] **Address Self-Collision Glitches:** Re-architect self-collision to move away from sequential out-of-loop projections. Evaluate integrating self-collision directly into the PD local-global loop as dynamic constraints, or transition to strict Continuous Collision Detection (CCD) / Incremental Potential Contact (IPC).
+- [ ] Proceed to orthotropic material integration and validation.
+- [ ] Refine visual rendering within Bevy and implement robust shadow casting
+- [ ] Implement `WgpuBackend` for GPU-accelerated compute
+
+<!-- TEMPLATE: Copy the block below for each new day -->
 ## YYYY-MM-DD
 
 ### Current State
