@@ -47,6 +47,12 @@ pub struct SimulationState {
     // ─── Per-vertex mass (inverse mass for pinning) ───
     pub mass: Vec<f32>,
     pub inv_mass: Vec<f32>,
+
+    // ─── Ground plane constraint ───
+    /// Optional ground plane height (Y coordinate).
+    /// When set, the solver enforces this as a hard constraint
+    /// during PD iterations, preventing vertices from going below.
+    pub ground_height: Option<f32>,
 }
 
 impl SimulationState {
@@ -95,6 +101,7 @@ impl SimulationState {
             pred_z: vec![0.0; n],
             mass,
             inv_mass,
+            ground_height: None,
         })
     }
 
@@ -115,6 +122,59 @@ impl SimulationState {
             self.pred_x[i] = self.pos_x[i] + dt * self.vel_x[i] + dt2 * gravity[0];
             self.pred_y[i] = self.pos_y[i] + dt * self.vel_y[i] + dt2 * gravity[1];
             self.pred_z[i] = self.pos_z[i] + dt * self.vel_z[i] + dt2 * gravity[2];
+
+            // Clamp predictions above ground (prevents solver from
+            // targeting below-ground positions)
+            if let Some(ground_y) = self.ground_height {
+                let surface = ground_y + Self::GROUND_SURFACE_OFFSET;
+                if self.pred_y[i] < surface {
+                    self.pred_y[i] = surface;
+                }
+            }
+        }
+    }
+
+    /// Small offset above ground height to prevent z-fighting between
+    /// cloth vertices and the ground plane visual.
+    const GROUND_SURFACE_OFFSET: f32 = 0.005;
+
+    /// Enforce ground plane constraint on current positions.
+    ///
+    /// Called after each PD iteration (like pinning) to prevent
+    /// the solver from converging to below-ground positions.
+    /// Clamps to slightly above ground to prevent z-fighting.
+    pub fn enforce_ground(&mut self) {
+        if let Some(ground_y) = self.ground_height {
+            let surface = ground_y + Self::GROUND_SURFACE_OFFSET;
+            for i in 0..self.vertex_count {
+                if self.inv_mass[i] > 0.0 && self.pos_y[i] < surface {
+                    self.pos_y[i] = surface;
+                }
+            }
+        }
+    }
+
+    /// Zero downward velocities for vertices on the ground.
+    ///
+    /// Called after velocity update to prevent grounded vertices
+    /// from accumulating downward velocity into the next timestep.
+    pub fn enforce_ground_velocities(&mut self) {
+        if let Some(ground_y) = self.ground_height {
+            let surface = ground_y + Self::GROUND_SURFACE_OFFSET;
+            for i in 0..self.vertex_count {
+                if self.inv_mass[i] > 0.0 && self.pos_y[i] <= surface {
+                    // Zero downward velocity
+                    if self.vel_y[i] < 0.0 {
+                        self.vel_y[i] = 0.0;
+                    }
+                    // Ensure prev_y is at ground level so next
+                    // timestep's velocity computation is clean
+                    self.prev_y[i] = surface;
+                    // Apply friction to tangential velocities
+                    self.vel_x[i] *= 0.5;
+                    self.vel_z[i] *= 0.5;
+                }
+            }
         }
     }
 

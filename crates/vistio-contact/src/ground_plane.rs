@@ -36,6 +36,11 @@ impl GroundPlane {
             if depth > 0.0 {
                 state.pos_y[i] = self.height;
 
+                // Also update prev_y so the velocity computation
+                // (pos - prev) / dt doesn't produce spurious downward
+                // velocity next step — this prevents jelly oscillation.
+                state.prev_y[i] = self.height;
+
                 // Apply simple kinetic friction to tangential velocities
                 state.vel_x[i] *= 0.5;
                 state.vel_z[i] *= 0.5;

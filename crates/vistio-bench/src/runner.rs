@@ -35,17 +35,17 @@ impl BenchmarkRunner {
             scenario.garment.clone(),
             0.01, // thickness
             1.0,  // stiffness
-        ).with_ground(-0.3);
+        );
 
         match scenario.kind {
             ScenarioKind::SphereDrape => {
-                pipeline = pipeline.with_sphere(vistio_math::Vec3::new(0.0, 0.0, 0.0), 0.3);
+                pipeline = pipeline
+                    .with_ground(-0.3)
+                    .with_sphere(vistio_math::Vec3::new(0.0, 0.0, 0.0), 0.3);
             },
-            ScenarioKind::SelfFold => {
-                let topology = Topology::build(&scenario.garment);
-                pipeline = pipeline.with_self_collision(&topology, 2);
-            },
-            _ => {}
+            _ => {
+                pipeline = pipeline.with_ground(-0.3);
+            }
         }
 
         Self::run_with_collision(scenario, solver, Some(pipeline))
@@ -88,6 +88,13 @@ impl BenchmarkRunner {
             vertex_mass,
             &scenario.pinned,
         )?;
+
+        // Wire ground height into the solver's internal constraint enforcement
+        if let Some(ref pipeline) = collision {
+            if let Some(ref ground) = pipeline.ground {
+                state.ground_height = Some(ground.height);
+            }
+        }
 
         // Save initial positions for displacement tracking
         let initial_y: Vec<f32> = state.pos_y.clone();

@@ -292,6 +292,9 @@ impl SolverStrategy for ProjectiveDynamicsSolver {
                 }
             }
 
+            // Enforce ground plane constraint (like pinning — hard constraint)
+            state.enforce_ground();
+
             // Apply bending corrections (post-solve position adjustment)
             if let Some(ref bending) = self.bending {
                 let bend_scale = self.config.bending_weight * dt * dt;
@@ -319,6 +322,9 @@ impl SolverStrategy for ProjectiveDynamicsSolver {
                 }
             }
 
+            // Enforce ground again after bending (bending may push below ground)
+            state.enforce_ground();
+
             iterations = iter + 1;
 
             if final_residual < self.config.tolerance {
@@ -329,7 +335,11 @@ impl SolverStrategy for ProjectiveDynamicsSolver {
         // 5. Update velocities from position difference
         state.update_velocities(dt);
 
-        // 6. Apply basic damping
+        // 6. Enforce ground velocity constraints
+        //    (zero downward velocities for grounded vertices)
+        state.enforce_ground_velocities();
+
+        // 7. Apply basic damping
         state.damp_velocities(self.config.damping);
 
         // 7. Rayleigh mass-proportional damping: v *= 1 / (1 + α_M * dt)

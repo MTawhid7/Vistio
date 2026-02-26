@@ -12,36 +12,38 @@ Built in Rust with a modular crate architecture, Vistio targets production-grade
 
 ✅ **Tier 0 — Foundation & Interface Contract** — Complete
 ✅ **Tier 1 — Projective Dynamics Solver** — Complete
+✅ **Tier 2 — Co-Rotational FEM & Visual Simulation** — Complete
 
 | Gate | Result |
 | --- | --- |
 | Build | ✅ 13 crates |
-| Tests | ✅ 111 pass |
-| Clippy | ✅ 0 warnings |
+| Tests | ✅ 174 pass |
+| Clippy | ✅ 0 errors |
 | CLI | ✅ 4 subcommands |
 
 ### What's Implemented
 
 - **Core types** — Strongly-typed IDs, error handling, physical constants
 - **Linear algebra** — 3×2 deformation gradients, polar decomposition, CSR sparse matrices
-- **Mesh system** — SoA TriangleMesh, procedural generators (quad grid, UV sphere), topology queries, vertex normals
-- **Materials** — ConstitutiveModel trait, FabricProperties (KES-mapped), 5 built-in presets, `OrthotropicLinearModel` (anisotropic), tension-field strain limiting
-- **Solver** — Projective Dynamics robust local-global solver, prefactored Cholesky (`faer`), ARAP co-rotational elements, integrated dihedral bending system matrix, Rayleigh damping
-- **Contact** — Unified collision pipeline (spatial hash broad phase, vertex-triangle narrow phase, projection response, ground plane), robust 3-phase self-collision (topology exclusion, greedy batch coloring)
+- **Mesh system** — SoA TriangleMesh, procedural generators (quad grid, UV sphere), topology queries, vertex normals, alternating checkerboard triangulation
+- **Materials** — ConstitutiveModel trait, FabricProperties (KES-mapped), 5 built-in presets, `CoRotationalModel` (tension-field theory), `OrthotropicLinearModel` (anisotropic)
+- **Solver** — Projective Dynamics robust local-global solver, prefactored Cholesky (`faer`), ARAP co-rotational elements, integrated dihedral bending system matrix, Rayleigh damping, area-weighted lumped mass
+- **Contact** — Unified collision pipeline (spatial hash broad phase, vertex-triangle narrow phase, projection response, ground plane, sphere collider), vertex-triangle self-collision system (topology exclusion, greedy batch coloring)
+- **Viewer** — Bevy PBR real-time 3D viewer with pan/orbit camera, dynamic vertex normals, double-sided materials, shadow casting
 - **GPU abstraction** — GpuBackend trait, CpuFallback (axpy, dot, fill), ComputeBuffer
 - **Telemetry** — EventBus (mpsc), 7 event types, pluggable sinks
 - **Debug** — InspectionHook trait, state snapshots with bincode serialization
-- **Benchmarks** — 3 procedural scenarios, metrics collection, CSV export
-- **Rendering** — Renderer trait, HeadlessRenderer (visual rendering planned for Tier 2)
-- **CLI** — `simulate`, `benchmark`, `inspect`, `validate` subcommands
+- **Benchmarks** — 2 procedural scenarios (hanging sheet, sphere drape), metrics collection, CSV export
+- **Rendering** — Renderer trait, HeadlessRenderer
+- **CLI** — `simulate`, `benchmark`, `inspect`, `visualize` subcommands
 
 ### What's Not Yet Implemented
 
-- **Edge-edge Narrow Phase** — CCD for tunneling prevention (Tier 2-3)
-- **GPU compute** — wgpu backend with WGSL shaders (Tier 2)
-- **Live visual simulation** — real-time wgpu renderer (Tier 2)
-- **IPC barriers** — Incremental Potential Contact (Tier 3)
-- **Adaptive remeshing** — dynamic mesh refinement (Tier 4)
+- **Robust Self-Collision** — Deferred to Tier 4 (IPC barrier contact). Current position-projection approach cannot prevent tunneling or explosive corrections for complex folding scenarios.
+- **Edge-edge Narrow Phase** — CCD for tunneling prevention (Tier 4)
+- **GPU compute** — wgpu backend with WGSL shaders (Tier 5)
+- **IPC barriers** — Incremental Potential Contact (Tier 4)
+- **Adaptive remeshing** — Dynamic mesh refinement (Tier 6)
 
 ---
 
@@ -131,7 +133,8 @@ cargo run --bin vistio -- inspect snapshot.bin
 | --- | --- | --- | --- |
 | `hanging_sheet` | 1m² cloth pinned at top edge | 20×20 (441 verts) | 120 (2s) |
 | `sphere_drape` | 1.5m² cloth falling onto sphere | 20×20 (441 verts) | 180 (3s) |
-| `self_fold` | Corner-pinned cloth folding | 20×10 (231 verts) | 120 (2s) |
+
+> **Note:** Self-collision testing (`self_fold`) has been deferred to Tier 4 (IPC barrier contact). The current position-projection collision approach cannot robustly handle cloth-on-cloth contact.
 
 ---
 
@@ -181,9 +184,11 @@ All tests live in `crates/<name>/tests/<name>_tests.rs`. No inline `#[cfg(test)]
 | --- | --- | --- |
 | **Tier 0** | Foundation, traits, pipeline | ✅ Complete |
 | **Tier 1** | Real PD solver, spatial hash, `faer` | ✅ Complete |
-| **Tier 2** | Bevy renderer, advanced physics tuning | 🔄 In Progress |
-| **Tier 3** | IPC barriers, CCD, anisotropic models | 🔲 Planned |
-| **Tier 4** | Adaptive remeshing, implicit solver | 🔲 Planned |
+| **Tier 2** | Co-Rotational FEM, Bevy viewer, collision pipeline | ✅ Complete |
+| **Tier 3** | Discrete shell bending, anisotropic materials | 🔲 Planned |
+| **Tier 4** | IPC barriers, CCD, robust self-collision | 🔲 Planned |
+| **Tier 5** | GPU acceleration (`wgpu`) | 🔲 Planned |
+| **Tier 6** | Adaptive remeshing | 🔲 Planned |
 
 ## License
 

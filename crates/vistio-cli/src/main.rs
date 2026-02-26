@@ -23,7 +23,7 @@ enum Commands {
 
     /// Run benchmark suite.
     Benchmark {
-        /// Which scenario to run (hanging_sheet, sphere_drape, self_fold, all).
+        /// Which scenario to run (hanging_sheet, sphere_drape, all).
         #[arg(short, long, default_value = "all")]
         scenario: String,
 

@@ -31,6 +31,7 @@ struct SimRunner {
 #[derive(Resource)]
 struct SceneData {
     body: Option<vistio_mesh::TriangleMesh>,
+    ground_height: f32,
 }
 
 /// Component to tag the Bevy cloth entity.
@@ -76,7 +77,7 @@ pub fn launch_viewer(scenario: Scenario) -> Result<(), Box<dyn std::error::Error
         scenario.vertex_mass
     };
 
-    let state = SimulationState::from_mesh(
+    let mut state = SimulationState::from_mesh(
         &scenario.garment,
         vertex_mass,
         &scenario.pinned,
@@ -89,17 +90,24 @@ pub fn launch_viewer(scenario: Scenario) -> Result<(), Box<dyn std::error::Error
         scenario.garment.clone(),
         0.01,
         1.0,
-    ).with_ground(-0.3);
+    );
 
+    let ground_height: f32;
     match scenario.kind {
         vistio_bench::scenarios::ScenarioKind::SphereDrape => {
-            pipeline = pipeline.with_sphere(vistio_math::Vec3::new(0.0, 0.0, 0.0), 0.3);
+            ground_height = -0.3;
+            pipeline = pipeline
+                .with_ground(-0.3)
+                .with_sphere(vistio_math::Vec3::new(0.0, 0.0, 0.0), 0.3);
         },
-        vistio_bench::scenarios::ScenarioKind::SelfFold => {
-            pipeline = pipeline.with_self_collision(&topology, 2);
-        },
-        _ => {}
+        _ => {
+            ground_height = -0.3;
+            pipeline = pipeline.with_ground(-0.3);
+        }
     }
+
+    // Wire ground height into the solver's internal constraint enforcement
+    state.ground_height = Some(ground_height);
 
     let runner = SimRunner {
         solver,
@@ -112,6 +120,7 @@ pub fn launch_viewer(scenario: Scenario) -> Result<(), Box<dyn std::error::Error
 
     let scene_data = SceneData {
         body: scenario.body.clone(),
+        ground_height,
     };
 
     let mut app = App::new();
@@ -305,10 +314,11 @@ fn setup_scene(
         ..default()
     });
 
+    let gh = scene_data.ground_height;
     commands.spawn(PbrBundle {
         mesh: meshes.add(Cuboid::new(4.0, 0.05, 4.0)),
         material: ground_material,
-        transform: Transform::from_xyz(0.0, -0.325, 0.0), // top face at Y = -0.3
+        transform: Transform::from_xyz(0.0, gh - 0.025, 0.0), // top face at Y = ground_height
         ..default()
     });
 

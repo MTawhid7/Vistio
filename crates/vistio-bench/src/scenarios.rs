@@ -1,9 +1,10 @@
 //! Benchmark scenarios — procedural mesh + pinning + config for each test case.
 //!
-//! Three canonical scenarios for regression testing:
+//! Two canonical scenarios for regression testing:
 //! 1. **Hanging sheet** — Cloth pinned at top edge, drapes under gravity
 //! 2. **Sphere drape** — Cloth falls onto a sphere
-//! 3. **Self-fold** — Cloth folds onto itself (self-collision stress test)
+//!
+//! Self-collision testing is deferred to Tier 4 (IPC barrier contact).
 
 use serde::{Deserialize, Serialize};
 
@@ -19,8 +20,6 @@ pub enum ScenarioKind {
     HangingSheet,
     /// Cloth draped over a sphere.
     SphereDrape,
-    /// Cloth self-folding (self-collision stress test).
-    SelfFold,
 }
 
 impl ScenarioKind {
@@ -29,7 +28,6 @@ impl ScenarioKind {
         &[
             ScenarioKind::HangingSheet,
             ScenarioKind::SphereDrape,
-            ScenarioKind::SelfFold,
         ]
     }
 
@@ -38,7 +36,6 @@ impl ScenarioKind {
         match self {
             ScenarioKind::HangingSheet => "hanging_sheet",
             ScenarioKind::SphereDrape => "sphere_drape",
-            ScenarioKind::SelfFold => "self_fold",
         }
     }
 }
@@ -132,50 +129,11 @@ impl Scenario {
         }
     }
 
-    /// Create the self-fold scenario.
-    ///
-    /// A 1m × 0.5m cloth pinned at two opposite corners,
-    /// which will fold onto itself under gravity.
-    pub fn self_fold() -> Self {
-        let cols = 20;
-        let rows = 10;
-        let mut garment = quad_grid(cols, rows, 1.0, 0.5);
-        let n = garment.vertex_count();
-
-        // Orient UV coordinates down the Y-axis so vertex 0 is held high
-        // and the rest form a cone/diamond beneath it.
-        for i in 0..n {
-            let px = garment.pos_x[i];
-            let py = garment.pos_y[i];
-
-            // X and Z spread slightly, Y drops diagonally
-            garment.pos_x[i] = px;
-            garment.pos_y[i] = 1.5 - (px + py) * 0.5;
-            garment.pos_z[i] = py;
-        }
-
-        // No pinning for self fold - drop it from its high point
-        let pinned = vec![false; n];
-
-        Self {
-            kind: ScenarioKind::SelfFold,
-            garment,
-            body: None,
-            pinned,
-            config: SolverConfig::default(),
-            timesteps: 120,
-            dt: 1.0 / 60.0,
-            vertex_mass: 0.002,
-            material: None,
-        }
-    }
-
     /// Create a scenario by kind.
     pub fn from_kind(kind: ScenarioKind) -> Self {
         match kind {
             ScenarioKind::HangingSheet => Self::hanging_sheet(),
             ScenarioKind::SphereDrape => Self::sphere_drape(),
-            ScenarioKind::SelfFold => Self::self_fold(),
         }
     }
 

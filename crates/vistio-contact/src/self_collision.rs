@@ -1,23 +1,21 @@
 //! Self-collision detection and resolution.
 //!
-//! Implements the 3-phase self-collision pipeline:
-//! 1. **Detection**: Spatial hash → candidate pairs, filtered by topology exclusion
-//! 2. **Coloring**: Graph coloring for parallel-safe batching
-//! 3. **Resolution**: Mass-weighted position corrections per batch
+//! Uses vertex-triangle proximity tests for accurate collision detection.
+//! The pipeline:
+//! 1. **Broad phase**: Spatial hash → candidate vertex pairs
+//! 2. **Narrow phase**: For each pair (a,b), test vertex a against triangles
+//!    containing b (and vice versa), filtered by topology exclusion
+//! 3. **Resolution**: Push vertex out of triangle along the contact normal
 
+use vistio_math::Vec3;
 use vistio_mesh::TriangleMesh;
 use vistio_mesh::topology::Topology;
 use vistio_solver::state::SimulationState;
 
 use crate::broad::BroadPhase;
-use crate::coloring::CollisionColoring;
 use crate::exclusion::TopologyExclusion;
 
-/// Self-collision system: detect → color → resolve.
-///
-/// Uses topology exclusion to filter adjacent vertices,
-/// graph coloring for parallel safety, and mass-weighted
-/// position corrections for resolution.
+/// Self-collision system: detect → resolve using vertex-triangle tests.
 pub struct SelfCollisionSystem {
     /// Topology-based exclusion (n-ring neighborhood).
     exclusion: TopologyExclusion,
@@ -25,6 +23,10 @@ pub struct SelfCollisionSystem {
     thickness: f32,
     /// Response stiffness (0.0–1.0).
     stiffness: f32,
+    /// Triangle indices (flattened: [a0,b0,c0, a1,b1,c1, ...]).
+    triangles: Vec<[u32; 3]>,
+    /// For each vertex, which triangles contain it.
+    vertex_to_triangles: Vec<Vec<usize>>,
 }
 
 /// Result of self-collision resolution.
@@ -44,13 +46,6 @@ pub struct SelfCollisionResult {
 
 impl SelfCollisionSystem {
     /// Create a new self-collision system.
-    ///
-    /// # Arguments
-    /// - `mesh`: Reference mesh for topology computation
-    /// - `topology`: Pre-computed mesh topology
-    /// - `exclusion_depth`: N-ring exclusion depth (typically 2)
-    /// - `thickness`: Proximity threshold for collision detection
-    /// - `stiffness`: Response stiffness (0.0 = no response, 1.0 = full correction)
     pub fn new(
         mesh: &TriangleMesh,
         topology: &Topology,
@@ -59,156 +54,207 @@ impl SelfCollisionSystem {
         stiffness: f32,
     ) -> Self {
         let exclusion = TopologyExclusion::new(mesh, topology, exclusion_depth);
+
+        // Build triangle list
+        let tri_count = mesh.triangle_count();
+        let mut triangles = Vec::with_capacity(tri_count);
+        for t in 0..tri_count {
+            triangles.push(mesh.triangle(t));
+        }
+
+        // Build vertex → triangle map
+        let n = mesh.vertex_count();
+        let mut vertex_to_triangles: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for (ti, tri) in triangles.iter().enumerate() {
+            vertex_to_triangles[tri[0] as usize].push(ti);
+            vertex_to_triangles[tri[1] as usize].push(ti);
+            vertex_to_triangles[tri[2] as usize].push(ti);
+        }
+
         Self {
             exclusion,
             thickness,
             stiffness,
+            triangles,
+            vertex_to_triangles,
         }
     }
 
-    /// Run the full self-collision pipeline: detect → color → resolve.
+    /// Run the full self-collision pipeline: detect → resolve.
     pub fn solve(
         &mut self,
         state: &mut SimulationState,
         broad: &mut dyn BroadPhase,
     ) -> SelfCollisionResult {
-        // Phase 1: Detection — query broad phase and filter with topology
+        // Phase 1: Broad phase — get candidate vertex pairs
         broad.update(state, self.thickness).ok();
         let candidates = broad.query_pairs();
+        let candidate_count = candidates.len() as u32;
 
-        let mut proximity_pairs: Vec<(u32, u32)> = Vec::new();
+        let mut corrections = 0u32;
+        let mut proximity_count = 0u32;
 
+        // Phase 2+3: For each candidate pair, do vertex-triangle tests + resolve
         for candidate in &candidates {
-            let i = candidate.a as usize;
-            let j = candidate.b as usize;
+            let vi = candidate.a as usize;
+            let vj = candidate.b as usize;
 
             // Skip if topologically adjacent
-            if self.exclusion.should_exclude(i, j) {
+            if self.exclusion.should_exclude(vi, vj) {
                 continue;
             }
 
-            // Distance test
-            let dx = state.pos_x[i] - state.pos_x[j];
-            let dy = state.pos_y[i] - state.pos_y[j];
-            let dz = state.pos_z[i] - state.pos_z[j];
-            let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+            // Test vertex vi against triangles containing vj
+            corrections += self.test_and_resolve_vertex_against_triangles(
+                vi, vj, state, &mut proximity_count,
+            );
 
-            if dist < self.thickness {
-                proximity_pairs.push((candidate.a, candidate.b));
-            }
-        }
-
-        let candidate_count = candidates.len() as u32;
-        let proximity_count = proximity_pairs.len() as u32;
-
-        if proximity_pairs.is_empty() {
-            return SelfCollisionResult {
-                candidate_pairs: candidate_count,
-                filtered_pairs: 0,
-                proximity_pairs: 0,
-                batch_count: 0,
-                corrections_applied: 0,
-            };
-        }
-
-        // Phase 2: Coloring — organize into parallel-safe batches
-        let (sorted_pairs, batch_offsets) =
-            CollisionColoring::color_pairs(&proximity_pairs, state.vertex_count);
-
-        let batch_count = (batch_offsets.len().saturating_sub(1)) as u32;
-
-        // Phase 3: Resolution — mass-weighted position corrections
-        let mut corrections = 0u32;
-
-        for batch_idx in 0..batch_offsets.len().saturating_sub(1) {
-            let start = batch_offsets[batch_idx];
-            let end = batch_offsets[batch_idx + 1];
-
-            for &(a, b) in &sorted_pairs[start..end] {
-                let i = a as usize;
-                let j = b as usize;
-
-                // Recompute distance (positions may have changed from earlier batches)
-                let dx = state.pos_x[i] - state.pos_x[j];
-                let dy = state.pos_y[i] - state.pos_y[j];
-                let dz = state.pos_z[i] - state.pos_z[j];
-                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-
-                if dist >= self.thickness || dist < 1e-10 {
-                    continue;
-                }
-
-                let overlap = self.thickness - dist;
-                let nx = dx / dist;
-                let ny = dy / dist;
-                let nz = dz / dist;
-
-                // Mass-weighted correction
-                let w_i = state.inv_mass[i];
-                let w_j = state.inv_mass[j];
-                let w_sum = w_i + w_j;
-
-                if w_sum < 1e-10 {
-                    continue; // Both pinned
-                }
-
-                let correction = overlap * self.stiffness;
-                let ratio_i = w_i / w_sum;
-                let ratio_j = w_j / w_sum;
-
-                let dx_i = nx * correction * ratio_i;
-                let dy_i = ny * correction * ratio_i;
-                let dz_i = nz * correction * ratio_i;
-
-                let dx_j = nx * correction * ratio_j;
-                let dy_j = ny * correction * ratio_j;
-                let dz_j = nz * correction * ratio_j;
-
-                // Push apart along the normal
-                state.pos_x[i] += dx_i;
-                state.pos_y[i] += dy_i;
-                state.pos_z[i] += dz_i;
-
-                state.pos_x[j] -= dx_j;
-                state.pos_y[j] -= dy_j;
-                state.pos_z[j] -= dz_j;
-
-                // Calculate relative velocity
-                let v_rel_x = state.vel_x[i] - state.vel_x[j];
-                let v_rel_y = state.vel_y[i] - state.vel_y[j];
-                let v_rel_z = state.vel_z[i] - state.vel_z[j];
-
-                // Approach velocity along the normal
-                let vn = v_rel_x * nx + v_rel_y * ny + v_rel_z * nz;
-
-                // Stop further approach (perfectly inelastic impulse)
-                // Only act if they are moving towards each other
-                if vn < 0.0 {
-                    let impulse_mag = -vn;
-
-                    let dv_x = impulse_mag * nx;
-                    let dv_y = impulse_mag * ny;
-                    let dv_z = impulse_mag * nz;
-
-                    state.vel_x[i] += dv_x * ratio_i;
-                    state.vel_y[i] += dv_y * ratio_i;
-                    state.vel_z[i] += dv_z * ratio_i;
-
-                    state.vel_x[j] -= dv_x * ratio_j;
-                    state.vel_y[j] -= dv_y * ratio_j;
-                    state.vel_z[j] -= dv_z * ratio_j;
-                }
-
-                corrections += 1;
-            }
+            // Test vertex vj against triangles containing vi
+            corrections += self.test_and_resolve_vertex_against_triangles(
+                vj, vi, state, &mut proximity_count,
+            );
         }
 
         SelfCollisionResult {
             candidate_pairs: candidate_count,
             filtered_pairs: proximity_count,
             proximity_pairs: proximity_count,
-            batch_count,
+            batch_count: 1,
             corrections_applied: corrections,
         }
     }
+
+    /// Test vertex `vi` against all triangles containing vertex `vj`.
+    /// Applies position corrections if penetration is found.
+    fn test_and_resolve_vertex_against_triangles(
+        &self,
+        vi: usize,
+        vj: usize,
+        state: &mut SimulationState,
+        proximity_count: &mut u32,
+    ) -> u32 {
+        let mut corrections = 0u32;
+
+        let p = Vec3::new(state.pos_x[vi], state.pos_y[vi], state.pos_z[vi]);
+
+        for &ti in &self.vertex_to_triangles[vj] {
+            let [a, b, c] = self.triangles[ti];
+            let a = a as usize;
+            let b = b as usize;
+            let c = c as usize;
+
+            // Skip if vertex is part of this triangle
+            if vi == a || vi == b || vi == c {
+                continue;
+            }
+
+            // Skip if any triangle vertex is topologically adjacent to vi
+            if self.exclusion.should_exclude(vi, a)
+                || self.exclusion.should_exclude(vi, b)
+                || self.exclusion.should_exclude(vi, c)
+            {
+                continue;
+            }
+
+            let pa = Vec3::new(state.pos_x[a], state.pos_y[a], state.pos_z[a]);
+            let pb = Vec3::new(state.pos_x[b], state.pos_y[b], state.pos_z[b]);
+            let pc = Vec3::new(state.pos_x[c], state.pos_y[c], state.pos_z[c]);
+
+            // Test proximity
+            if let Some((penetration, normal)) =
+                point_triangle_proximity(p, pa, pb, pc, self.thickness)
+            {
+                *proximity_count += 1;
+
+                // Apply correction: push vertex along triangle normal
+                if penetration > 0.0 && state.inv_mass[vi] > 0.0 {
+                    let correction = penetration * self.stiffness;
+                    state.pos_x[vi] += normal.x * correction;
+                    state.pos_y[vi] += normal.y * correction;
+                    state.pos_z[vi] += normal.z * correction;
+
+                    // Inelastic velocity correction
+                    let vn = state.vel_x[vi] * normal.x
+                           + state.vel_y[vi] * normal.y
+                           + state.vel_z[vi] * normal.z;
+                    if vn < 0.0 {
+                        state.vel_x[vi] -= vn * normal.x;
+                        state.vel_y[vi] -= vn * normal.y;
+                        state.vel_z[vi] -= vn * normal.z;
+                    }
+
+                    corrections += 1;
+                }
+            }
+        }
+
+        corrections
+    }
+}
+
+/// Test proximity between a point and a triangle.
+///
+/// Returns `Some((penetration_depth, normal))` if the point is within
+/// `thickness` of the triangle, `None` otherwise.
+/// The normal points from the triangle toward the vertex.
+fn point_triangle_proximity(
+    p: Vec3,
+    a: Vec3,
+    b: Vec3,
+    c: Vec3,
+    thickness: f32,
+) -> Option<(f32, Vec3)> {
+    let ab = b - a;
+    let ac = c - a;
+    let ap = p - a;
+
+    let tri_normal = ab.cross(ac);
+    let area2 = tri_normal.length();
+    if area2 < 1e-10 {
+        return None; // Degenerate triangle
+    }
+    let tri_normal = tri_normal / area2;
+
+    // Signed distance from point to triangle plane
+    let signed_dist = ap.dot(tri_normal);
+    let abs_dist = signed_dist.abs();
+
+    if abs_dist > thickness {
+        return None; // Too far
+    }
+
+    // Project point onto the triangle plane
+    let projected = p - tri_normal * signed_dist;
+    let ap_proj = projected - a;
+
+    // Barycentric coordinates using Cramer's rule
+    let d00 = ab.dot(ab);
+    let d01 = ab.dot(ac);
+    let d11 = ac.dot(ac);
+    let d20 = ap_proj.dot(ab);
+    let d21 = ap_proj.dot(ac);
+
+    let denom = d00 * d11 - d01 * d01;
+    if denom.abs() < 1e-10 {
+        return None;
+    }
+    let inv_denom = 1.0 / denom;
+
+    let v = (d11 * d20 - d01 * d21) * inv_denom;
+    let w = (d00 * d21 - d01 * d20) * inv_denom;
+    let u = 1.0 - v - w;
+
+    // Check if projection is inside the triangle
+    let tol = -0.01;
+    if u < tol || v < tol || w < tol {
+        return None; // Outside triangle
+    }
+
+    // Normal direction: always point from triangle toward vertex
+    let normal = if signed_dist >= 0.0 { tri_normal } else { -tri_normal };
+
+    // Penetration depth = how much the vertex needs to be pushed out
+    let penetration = thickness - abs_dist;
+
+    Some((penetration, normal))
 }

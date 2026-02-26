@@ -191,6 +191,55 @@ The simulation's environment collision pipelines (ground, sphere) are now fully 
 - [ ] Refine visual rendering within Bevy and implement robust shadow casting
 - [ ] Implement `WgpuBackend` for GPU-accelerated compute
 
+## 2026-02-26
+
+### Current State
+
+**Tier 2 — Complete.** Tiers 0–2 are now fully stabilized. The `hanging_sheet` and `sphere_drape` scenarios produce correct, physically realistic results with the Bevy PBR viewer. Self-collision testing has been **removed and deferred to Tier 4** (IPC barrier contact) after an extensive investigation revealed that the position-projection approach is fundamentally inadequate for robust cloth-on-cloth contact.
+
+### Progress
+
+- **Self-Collision Investigation:** Conducted a multi-day deep dive into self-collision detection and resolution, iterating through multiple scenario designs and parameter configurations.
+- **Root Cause Identified:** The original `SelfCollisionSystem::solve()` only performed **vertex-to-vertex distance** checks (two points within `thickness` of each other). With cloth as a triangle mesh, vertices easily pass *between* triangles without approaching other vertices. This was the primary detection failure.
+- **Fix Attempted (Vertex-Triangle Rewrite):** Rewrote `self_collision.rs` to use proper **vertex-triangle proximity tests** — for each broad-phase candidate pair (a, b), tests vertex a against all triangles containing b (and vice versa) using barycentric projection. Precomputed a vertex-to-triangle mapping for O(1) lookups.
+- **Fix Attempted (Anti-Tunneling):** Increased collision thickness from 0.02 → 0.08 (larger than per-step displacement at terminal velocity). Increased spatial hash cell size from 0.05 → 0.1 to match. Added 3× self-collision passes per pipeline step.
+- **Outcome:** The vertex-triangle rewrite improved detection but created **explosive spike artifacts** — when thickness is large enough to prevent tunneling, the corrections become too aggressive, creating a feedback loop with the ground plane. When thickness is small enough to avoid explosions, contacts are missed.
+- **Decision: Defer to Tier 4.** Removed the `self_fold` scenario and all self-collision simulation wiring from the runner, viewer, CLI, and bench tests. The self-collision system code (`self_collision.rs`) remains in `vistio-contact` for future use.
+- **Updated README and Roadmap:** Marked Tier 2 as complete. Updated roadmap tiers to align with `ROADMAP.md` (7 tiers). Clarified that robust self-collision requires IPC barrier methods (Tier 4).
+
+### Scenarios Explored for Self-Collision
+
+| Scenario | Description | Result |
+| --- | --- | --- |
+| Vertical sheet drop | Sheet dropped diagonally onto ground | Penetrated ground, absorbed into surface |
+| Horizontal sheet drop | Large flat sheet dropped from height | Settled flat — no folds, no self-collision test |
+| Rolled scroll drop | Pre-rolled sheet dropped | Explosive self-collision corrections, spikes |
+| Curtain pooling | Long curtain pinned at top, excess pools | Interpenetration between layers, persistent vibration |
+
+### Key Observations
+
+- **Tunneling is the Core Problem:** At free-fall speed (~4.4 m/s), vertices move ~7cm per frame (dt = 1/60). Position-based collision detection only checks the *final* position — if a vertex passed through a triangle during the step, the contact is never detected. The only options are: (a) make thickness ≥ max displacement (causes explosions), or (b) use Continuous Collision Detection.
+- **Position-Projection vs IPC:** The fundamental flaw of position-projection is that corrections are applied *outside* the solver's energy minimization. This creates an adversarial loop: the solver pushes vertices toward a physical state, collision pushes them somewhere else, and neither system converges. IPC solves this by integrating contact as an energy term *inside* the solver, guaranteeing convergence.
+- **Groundbreaking Insight for Tier 4:** The `VertexTriangleTest` (in `vertex_triangle.rs`) and the rewritten `SelfCollisionSystem` (vertex-triangle with topology exclusion) provide a solid geometric foundation. When IPC is implemented, the detection primitives can be reused — only the response strategy changes (from position projection to barrier energy).
+- **Sphere Drape Works Perfectly:** The sphere collision uses an analytical signed-distance function (infinite barrier at surface), which is fundamentally different from mesh-mesh self-collision. This is why sphere drape works while self-collision doesn't.
+
+### Issues & Decisions
+
+- **Decision:** Defer self-collision to Tier 4 (IPC barriers). The position-projection approach has a fundamental quality ceiling that cannot be overcome with parameter tuning.
+- **Decision:** Kept the self-collision system code (`self_collision.rs`, `exclusion.rs`, `coloring.rs`) in the crate for reuse in Tier 4. Only removed the scenario, tests, and wiring.
+- **Decision:** Reverted collision parameters to stable defaults (thickness=0.01, stiffness=1.0, cell_size=0.05) for the remaining 2 scenarios.
+
+### Next Steps
+
+- [ ] **Tier 3:** Discrete Shell bending model (Grinspun 2003) — curvature-based bending for realistic folds
+- [ ] **Tier 3:** Anisotropic warp/weft material tensor — direction-dependent stiffness
+- [ ] **Tier 3:** Material presets from KES data (cotton, silk, denim, jersey, chiffon)
+- [ ] **Tier 4:** Implement IPC barrier contact for guaranteed intersection-free simulation
+- [ ] **Tier 4:** Continuous Collision Detection (CCD) for tunneling prevention
+- [ ] **Tier 4:** Re-introduce `self_fold` scenario with IPC-based self-collision
+
+---
+
 <!-- TEMPLATE: Copy the block below for each new day -->
 
 <!--

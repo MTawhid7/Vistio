@@ -28,16 +28,8 @@ fn sphere_drape_setup() {
 }
 
 #[test]
-fn self_fold_setup() {
-    let s = Scenario::self_fold();
-    assert_eq!(s.kind, ScenarioKind::SelfFold);
-    let pinned_count = s.pinned.iter().filter(|&&p| p).count();
-    assert_eq!(pinned_count, 0); // No pins, free fall
-}
-
-#[test]
 fn all_scenarios() {
-    assert_eq!(ScenarioKind::all().len(), 3);
+    assert_eq!(ScenarioKind::all().len(), 2);
 }
 
 // ─── Runner Tests ─────────────────────────────────────────────

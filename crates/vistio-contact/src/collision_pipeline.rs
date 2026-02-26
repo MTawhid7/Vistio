@@ -102,14 +102,7 @@ impl CollisionPipeline {
         // 3. Contact response: resolve penetrations
         let mesh_result = self.response.resolve(&contacts, state, self.stiffness)?;
 
-        // 4. Self collision resolution (if enabled)
-        let self_collision_result = if let Some(ref mut self_col) = self.self_collision {
-            Some(self_col.solve(state, self.broad.as_mut()))
-        } else {
-            None
-        };
-
-        // 5. Ground plane (if present)
+        // 4. Ground plane (if present) — hard constraint, must run first
         let ground_result = if let Some(ref ground) = self.ground {
             ground.resolve(state)
         } else {
@@ -120,7 +113,19 @@ impl CollisionPipeline {
             }
         };
 
-        // 6. Sphere collider (if present)
+        // 5. Self collision resolution (if enabled)
+        let self_collision_result = if let Some(ref mut self_col) = self.self_collision {
+            Some(self_col.solve(state, self.broad.as_mut()))
+        } else {
+            None
+        };
+
+        // 6. Ground plane again (post self-collision enforcement)
+        if let Some(ref ground) = self.ground {
+            ground.resolve(state);
+        }
+
+        // 7. Sphere collider (if present)
         let sphere_result = if let Some(ref sphere) = self.sphere {
             sphere.resolve(state)
         } else {

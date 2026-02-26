@@ -51,10 +51,9 @@ pub fn benchmark(
         let kind = match scenario_name {
             "hanging_sheet" => ScenarioKind::HangingSheet,
             "sphere_drape" => ScenarioKind::SphereDrape,
-            "self_fold" => ScenarioKind::SelfFold,
             other => {
                 eprintln!("Unknown scenario: {other}");
-                eprintln!("Available: hanging_sheet, sphere_drape, self_fold, all");
+                eprintln!("Available: hanging_sheet, sphere_drape, all");
                 return Err("Unknown scenario".into());
             }
         };
@@ -152,7 +151,6 @@ pub fn visualize(
     let kind = match scenario_name {
         "hanging_sheet" => vistio_bench::scenarios::ScenarioKind::HangingSheet,
         "sphere_drape" => vistio_bench::scenarios::ScenarioKind::SphereDrape,
-        "self_fold" => vistio_bench::scenarios::ScenarioKind::SelfFold,
         other => {
             eprintln!("Unknown scenario: {other}");
             return Err("Unknown scenario".into());
