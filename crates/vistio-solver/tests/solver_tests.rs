@@ -165,7 +165,7 @@ fn pd_stub_init_and_step() {
     let mut state = SimulationState::from_mesh(&mesh, 0.01, &pinned).unwrap();
 
     let mut solver = ProjectiveDynamicsStub::new();
-    solver.init(&mesh, &topo, &config).unwrap();
+    solver.init(&mesh, &topo, &config, &pinned).unwrap();
 
     let result = solver.step(&mut state, 1.0 / 60.0).unwrap();
     assert!(result.converged);
@@ -182,7 +182,7 @@ fn pd_stub_gravity_motion() {
     let config = SolverConfig::default();
 
     let mut solver = ProjectiveDynamicsStub::new();
-    solver.init(&mesh, &topo, &config).unwrap();
+    solver.init(&mesh, &topo, &config, &pinned).unwrap();
 
     let initial_y: Vec<f32> = state.pos_y.clone();
 
@@ -218,7 +218,7 @@ fn pd_stub_pinned_vertices_stay() {
     let pin4_y = state.pos_y[4];
 
     let mut solver = ProjectiveDynamicsStub::new();
-    solver.init(&mesh, &topo, &config).unwrap();
+    solver.init(&mesh, &topo, &config, &pinned).unwrap();
 
     for _ in 0..20 {
         solver.step(&mut state, 1.0 / 60.0).unwrap();
@@ -378,7 +378,7 @@ fn assembly_rhs_length() {
     let pred = vec![0.0_f32; n];
     let proj = vec![(0.0_f32, 0.0, 0.0); elements.len()];
 
-    let rhs = assemble_rhs(n, &mass, dt, &pred, &proj, &elements, 0, None, None);
+    let rhs = assemble_rhs(n, &mass, dt, &pred, &proj, &elements, 0, None);
     assert_eq!(rhs.len(), n);
 }
 
@@ -391,9 +391,10 @@ fn pd_solver_init_succeeds() {
     let mesh = quad_grid(4, 4, 1.0, 1.0);
     let topo = Topology::build(&mesh);
     let config = SolverConfig::default();
+    let pinned = vec![false; mesh.vertex_count()];
 
     let mut solver = ProjectiveDynamicsSolver::new();
-    solver.init(&mesh, &topo, &config).unwrap();
+    solver.init(&mesh, &topo, &config, &pinned).unwrap();
     assert_eq!(solver.name(), "ProjectiveDynamics");
 }
 
@@ -407,7 +408,7 @@ fn pd_solver_single_step_runs() {
     let config = SolverConfig::debug(); // 3 iterations max
 
     let mut solver = ProjectiveDynamicsSolver::new();
-    solver.init(&mesh, &topo, &config).unwrap();
+    solver.init(&mesh, &topo, &config, &pinned).unwrap();
 
     let result = solver.step(&mut state, 1.0 / 60.0).unwrap();
     assert!(result.iterations > 0, "PD solver should run at least 1 iteration");
@@ -430,7 +431,7 @@ fn pd_solver_pinned_vertices_stay() {
     let pin4_y = state.pos_y[4];
 
     let mut solver = ProjectiveDynamicsSolver::new();
-    solver.init(&mesh, &topo, &config).unwrap();
+    solver.init(&mesh, &topo, &config, &pinned).unwrap();
 
     for _ in 0..5 {
         solver.step(&mut state, 1.0 / 60.0).unwrap();
@@ -461,7 +462,7 @@ fn pd_solver_gravity_pulls_down() {
     let initial_centroid_y: f32 = state.pos_y.iter().sum::<f32>() / n as f32;
 
     let mut solver = ProjectiveDynamicsSolver::new();
-    solver.init(&mesh, &topo, &config).unwrap();
+    solver.init(&mesh, &topo, &config, &pinned).unwrap();
 
     for _ in 0..10 {
         solver.step(&mut state, 1.0 / 60.0).unwrap();
@@ -559,10 +560,11 @@ fn material_aware_init_succeeds() {
     let config = SolverConfig::default();
     let db = MaterialDatabase::with_defaults();
     let props = db.get("cotton_twill").unwrap();
+    let pinned = vec![false; mesh.vertex_count()];
     let model = Box::new(CoRotationalModel::new());
 
     let mut solver = ProjectiveDynamicsSolver::new();
-    let result = solver.init_with_material(&mesh, &topology, &config, props, model);
+    let result = solver.init_with_material(&mesh, &topology, &config, props, model, &pinned);
     assert!(result.is_ok(), "init_with_material should succeed");
 }
 
@@ -576,7 +578,7 @@ fn material_aware_step_runs() {
     let model = Box::new(CoRotationalModel::new());
 
     let mut solver = ProjectiveDynamicsSolver::new();
-    solver.init_with_material(&mesh, &topology, &config, props, model).unwrap();
+    solver.init_with_material(&mesh, &topology, &config, props, model, &vec![false; mesh.vertex_count()]).unwrap();
 
     let n = mesh.vertex_count();
     let mut state = SimulationState::from_mesh(&mesh, 0.002, &vec![false; n]).unwrap();
@@ -597,7 +599,7 @@ fn silk_drapes_more_than_denim() {
         let model = Box::new(CoRotationalModel::new());
 
         let mut solver = ProjectiveDynamicsSolver::new();
-        solver.init_with_material(&mesh, &topology, &config, props, model).unwrap();
+        solver.init_with_material(&mesh, &topology, &config, props, model, &vec![false; mesh.vertex_count()]).unwrap();
 
         let n = mesh.vertex_count();
         let total_area: f32 = {
@@ -656,7 +658,7 @@ fn corotational_vs_isotropic_produce_different_results() {
     let corot_final_y = {
         let model = Box::new(CoRotationalModel::new());
         let mut solver = ProjectiveDynamicsSolver::new();
-        solver.init_with_material(&mesh, &topology, &config, props, model).unwrap();
+        solver.init_with_material(&mesh, &topology, &config, props, model, &vec![false; mesh.vertex_count()]).unwrap();
         let vm = props.mass_per_vertex(n, 1.0);
         let mut state = SimulationState::from_mesh(&mesh, vm, &vec![false; n]).unwrap();
         for _ in 0..5 { solver.step(&mut state, 1.0 / 60.0).unwrap(); }
@@ -667,7 +669,7 @@ fn corotational_vs_isotropic_produce_different_results() {
     let iso_final_y = {
         let model = Box::new(IsotropicLinearModel::new());
         let mut solver = ProjectiveDynamicsSolver::new();
-        solver.init_with_material(&mesh, &topology, &config, props, model).unwrap();
+        solver.init_with_material(&mesh, &topology, &config, props, model, &vec![false; mesh.vertex_count()]).unwrap();
         let vm = props.mass_per_vertex(n, 1.0);
         let mut state = SimulationState::from_mesh(&mesh, vm, &vec![false; n]).unwrap();
         for _ in 0..5 { solver.step(&mut state, 1.0 / 60.0).unwrap(); }
@@ -728,7 +730,7 @@ fn solver_rayleigh_damping_reduces_ke() {
         };
         let mut state = SimulationState::from_mesh(&mesh, 0.01, &pinned).unwrap();
         let mut solver = ProjectiveDynamicsSolver::new();
-        solver.init(&mesh, &topo, &config).unwrap();
+        solver.init(&mesh, &topo, &config, &pinned).unwrap();
         for _ in 0..20 {
             solver.step(&mut state, dt).unwrap();
         }
@@ -744,7 +746,7 @@ fn solver_rayleigh_damping_reduces_ke() {
         };
         let mut state = SimulationState::from_mesh(&mesh, 0.01, &pinned).unwrap();
         let mut solver = ProjectiveDynamicsSolver::new();
-        solver.init(&mesh, &topo, &config).unwrap();
+        solver.init(&mesh, &topo, &config, &pinned).unwrap();
         for _ in 0..20 {
             solver.step(&mut state, dt).unwrap();
         }
@@ -767,4 +769,197 @@ fn config_rayleigh_serialization() {
     let toml_str = toml::to_string(&config).unwrap();
     let recovered: SolverConfig = toml::from_str(&toml_str).unwrap();
     assert!((recovered.rayleigh_mass_damping - 3.5).abs() < 1e-6);
+}
+
+// ─── Discrete Shells Bending Tests (Tier 3) ──────────────────
+
+use vistio_solver::discrete_shells::DiscreteShellsBendingData;
+
+#[test]
+fn discrete_shells_element_count_matches_interior_edges() {
+    let mesh = quad_grid(4, 4, 1.0, 1.0);
+    let topo = Topology::build(&mesh);
+    let ds_bending = DiscreteShellsBendingData::from_topology(&mesh, &topo, 1.0);
+    assert_eq!(ds_bending.len(), topo.interior_edges.len());
+}
+
+#[test]
+fn discrete_shells_rest_angle_flat_mesh() {
+    // A flat quad grid should have rest dihedral angles of exactly π
+    let mesh = quad_grid(5, 5, 1.0, 1.0);
+    let topo = Topology::build(&mesh);
+    let ds_bending = DiscreteShellsBendingData::from_topology(&mesh, &topo, 1.0);
+
+    for elem in &ds_bending.elements {
+        assert_eq!(
+            elem.rest_angle,
+            std::f32::consts::PI,
+            "Flat mesh rest angle should be exactly π, got {}",
+            elem.rest_angle
+        );
+    }
+}
+
+#[test]
+fn discrete_shells_cotangent_weights_finite() {
+    let mesh = quad_grid(3, 3, 1.0, 1.0);
+    let topo = Topology::build(&mesh);
+    let ds_bending = DiscreteShellsBendingData::from_topology(&mesh, &topo, 1.0);
+
+    for elem in &ds_bending.elements {
+        for &s in &elem.stencil {
+            assert!(s.is_finite(), "Cotangent stencil value should be finite, got {}", s);
+        }
+        assert!(elem.weight.is_finite() && elem.weight > 0.0,
+            "Weight should be positive and finite, got {}", elem.weight);
+        assert!(elem.combined_area > 0.0,
+            "Combined area should be positive, got {}", elem.combined_area);
+    }
+}
+
+#[test]
+fn discrete_shells_solver_init_tier3_succeeds() {
+    let mesh = quad_grid(5, 5, 1.0, 1.0);
+    let topology = Topology::build(&mesh);
+    let config = SolverConfig::default();
+    let db = MaterialDatabase::with_defaults();
+    let props = db.get("cotton_twill").unwrap();
+    let model = Box::new(CoRotationalModel::new());
+
+    let mut solver = ProjectiveDynamicsSolver::new();
+    let result = solver.init_with_material_tier3(&mesh, &topology, &config, props, model, &vec![false; mesh.vertex_count()]);
+    assert!(result.is_ok(), "init_with_material_tier3 should succeed");
+}
+
+#[test]
+fn discrete_shells_solver_step_runs() {
+    let mesh = quad_grid(5, 5, 1.0, 1.0);
+    let topology = Topology::build(&mesh);
+    let config = SolverConfig { max_iterations: 3, ..Default::default() };
+    let db = MaterialDatabase::with_defaults();
+    let props = db.get("cotton_twill").unwrap();
+    let model = Box::new(CoRotationalModel::new());
+
+    let mut solver = ProjectiveDynamicsSolver::new();
+    solver.init_with_material_tier3(&mesh, &topology, &config, props, model, &vec![false; mesh.vertex_count()]).unwrap();
+
+    let n = mesh.vertex_count();
+    let mut state = SimulationState::from_mesh(&mesh, 0.002, &vec![false; n]).unwrap();
+    let result = solver.step(&mut state, 1.0 / 60.0);
+    assert!(result.is_ok(), "Tier 3 solver step should succeed");
+
+    let step_result = result.unwrap();
+    assert!(step_result.iterations > 0, "Should run at least 1 iteration");
+}
+
+#[test]
+fn discrete_shells_projection_preserves_edge_vertices() {
+    let mesh = quad_grid(3, 3, 1.0, 1.0);
+    let topo = Topology::build(&mesh);
+    let ds_bending = DiscreteShellsBendingData::from_topology(&mesh, &topo, 1.0);
+
+    if !ds_bending.is_empty() {
+        let elem = &ds_bending.elements[0];
+        let (p_v0, p_v1, _, _) = ds_bending.project(elem, &mesh.pos_x, &mesh.pos_y, &mesh.pos_z);
+
+        let orig_v0 = vistio_math::Vec3::new(
+            mesh.pos_x[elem.v0], mesh.pos_y[elem.v0], mesh.pos_z[elem.v0]
+        );
+        let orig_v1 = vistio_math::Vec3::new(
+            mesh.pos_x[elem.v1], mesh.pos_y[elem.v1], mesh.pos_z[elem.v1]
+        );
+
+        assert!((p_v0 - orig_v0).length() < 1e-6, "v0 should not move");
+        assert!((p_v1 - orig_v1).length() < 1e-6, "v1 should not move");
+    }
+}
+
+#[test]
+fn discrete_shells_with_material() {
+    let mesh = quad_grid(4, 4, 1.0, 1.0);
+    let topo = Topology::build(&mesh);
+    let db = MaterialDatabase::with_defaults();
+    let props = db.get("denim_14oz").unwrap();
+    let ds_bending = DiscreteShellsBendingData::from_topology_with_material(&mesh, &topo, props);
+
+    // Denim has higher bending stiffness → higher weights
+    let avg_weight: f32 = ds_bending.elements.iter().map(|e| e.weight).sum::<f32>()
+        / ds_bending.len() as f32;
+    assert!(avg_weight > 0.0, "Denim bending weight should be positive");
+
+    let silk_props = db.get("silk_charmeuse").unwrap();
+    let silk_bending = DiscreteShellsBendingData::from_topology_with_material(&mesh, &topo, silk_props);
+    let silk_avg: f32 = silk_bending.elements.iter().map(|e| e.weight).sum::<f32>()
+        / silk_bending.len() as f32;
+
+    assert!(avg_weight > silk_avg,
+        "Denim should have higher bend weight than silk: denim={:.4} silk={:.4}",
+        avg_weight, silk_avg);
+}
+
+// ─── Tier 3: Anisotropic Material Solver Tests ───────────────
+
+use vistio_material::AnisotropicCoRotationalModel;
+
+#[test]
+fn anisotropic_solver_init_succeeds() {
+    let mesh = quad_grid(5, 5, 1.0, 1.0);
+    let topology = Topology::build(&mesh);
+    let config = SolverConfig::default();
+    let db = MaterialDatabase::with_defaults();
+    let props = db.get("cotton_twill").unwrap();
+    let model = Box::new(AnisotropicCoRotationalModel::from_properties(props));
+
+    let mut solver = ProjectiveDynamicsSolver::new();
+    let result = solver.init_with_material_tier3(&mesh, &topology, &config, props, model, &vec![false; mesh.vertex_count()]);
+    assert!(result.is_ok(), "Anisotropic + Tier 3 init should succeed");
+}
+
+#[test]
+fn anisotropic_solver_step_runs() {
+    let mesh = quad_grid(5, 5, 1.0, 1.0);
+    let topology = Topology::build(&mesh);
+    let config = SolverConfig { max_iterations: 3, ..Default::default() };
+    let db = MaterialDatabase::with_defaults();
+    let props = db.get("cotton_twill").unwrap();
+    let model = Box::new(AnisotropicCoRotationalModel::from_properties(props));
+
+    let mut solver = ProjectiveDynamicsSolver::new();
+    solver.init_with_material_tier3(&mesh, &topology, &config, props, model, &vec![false; mesh.vertex_count()]).unwrap();
+
+    let n = mesh.vertex_count();
+    let total_area: f32 = 1.0; // 1m² grid
+    let vm = props.mass_per_vertex(n, total_area);
+    let mut state = SimulationState::from_mesh(&mesh, vm, &vec![false; n]).unwrap();
+
+    for _ in 0..5 {
+        let result = solver.step(&mut state, 1.0 / 60.0).unwrap();
+        assert!(result.iterations > 0);
+    }
+}
+
+#[test]
+fn fabric_properties_is_anisotropic() {
+    let db = MaterialDatabase::with_defaults();
+
+    // Cotton twill has warp=0.90, weft=0.80 → ratio 1.125 → anisotropic
+    let cotton = db.get("cotton_twill").unwrap();
+    assert!(cotton.is_anisotropic(),
+        "Cotton twill should be anisotropic: warp={}, weft={}",
+        cotton.stretch_stiffness_warp, cotton.stretch_stiffness_weft);
+
+    // Jersey has warp=0.35, weft=0.30 → ratio ~1.17 → anisotropic
+    let jersey = db.get("jersey_knit").unwrap();
+    assert!(jersey.is_anisotropic(),
+        "Jersey knit should be anisotropic: warp={}, weft={}",
+        jersey.stretch_stiffness_warp, jersey.stretch_stiffness_weft);
+}
+
+#[test]
+fn fabric_properties_warp_weft_ratio() {
+    let db = MaterialDatabase::with_defaults();
+    let cotton = db.get("cotton_twill").unwrap();
+
+    let ratio = cotton.warp_weft_ratio();
+    assert!(ratio > 1.0, "Cotton warp > weft, ratio should be > 1.0, got {}", ratio);
 }

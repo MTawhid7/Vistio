@@ -332,3 +332,71 @@ fn orthotropic_equal_stiffness_isotropic() {
         "Stretched element should have positive energy"
     );
 }
+
+// ─── Anisotropic Co-Rotational Model Tests (Tier 3) ──────────
+
+use vistio_material::AnisotropicCoRotationalModel;
+
+#[test]
+fn anisotropic_model_name() {
+    let model = AnisotropicCoRotationalModel::new(1.0, 1.0);
+    assert_eq!(model.name(), "anisotropic_corotational");
+}
+
+#[test]
+fn anisotropic_corotational_identity_zero_energy() {
+    let model = AnisotropicCoRotationalModel::new(1.0, 0.5);
+    let f = Mat3x2::IDENTITY;
+    let result = model.project(&f, 1.0, 1.0);
+    assert!(result.energy < 1e-6,
+        "Identity F should have ~0 energy, got {}", result.energy);
+}
+
+#[test]
+fn anisotropic_corotational_compression_zero_energy() {
+    // Tension-field theory should still work: compression → zero energy
+    let model = AnisotropicCoRotationalModel::new(1.0, 0.5);
+    let f = Mat3x2::from_cols(Vec3::X * 0.5, Vec3::Y * 0.5);
+    let result = model.project(&f, 1.0, 1.0);
+    assert!(result.energy < 1e-6,
+        "Compressed element should have ~0 energy with tension-field, got {}",
+        result.energy);
+}
+
+#[test]
+fn anisotropic_warp_weft_different_energy() {
+    // Warp is much stiffer (10x) → stretching along warp should cost more
+    let model = AnisotropicCoRotationalModel::new(10.0, 1.0);
+
+    // Stretch along warp direction (X-axis = col0)
+    let f_warp = Mat3x2::from_cols(Vec3::X * 2.0, Vec3::Y);
+    let e_warp = model.project(&f_warp, 1.0, 1.0).energy;
+
+    // Stretch along weft direction (Y-axis = col1)
+    let f_weft = Mat3x2::from_cols(Vec3::X, Vec3::Y * 2.0);
+    let e_weft = model.project(&f_weft, 1.0, 1.0).energy;
+
+    // Stretching along the stiffer warp direction restores MORE toward σ=1.0,
+    // creating a larger residual (F - target) → MORE energy.
+    // The weaker weft axis leaves target closer to the deformed state → LESS energy.
+    assert!(e_warp > e_weft,
+        "Stiff warp should yield more energy (larger restoration residual): warp={:.6} weft={:.6}",
+        e_warp, e_weft);
+}
+
+#[test]
+fn anisotropic_equal_stiffness_matches_corotational() {
+    // When warp = weft, results should match standard co-rotational
+    let corot = CoRotationalModel::new();
+    let aniso = AnisotropicCoRotationalModel::new(1.0, 1.0);
+
+    let f = Mat3x2::from_cols(Vec3::X * 1.5, Vec3::Y * 0.8);
+    let corot_result = corot.project(&f, 1.0, 1.0);
+    let aniso_result = aniso.project(&f, 1.0, 1.0);
+
+    // Energies should be very close
+    let diff = (corot_result.energy - aniso_result.energy).abs();
+    assert!(diff < corot_result.energy * 0.01 + 1e-6,
+        "Equal stiffness should match co-rotational: corot={:.6} aniso={:.6}",
+        corot_result.energy, aniso_result.energy);
+}

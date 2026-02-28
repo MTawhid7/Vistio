@@ -50,6 +50,7 @@ pub trait SolverStrategy: Send {
         mesh: &TriangleMesh,
         topology: &Topology,
         config: &SolverConfig,
+        pinned: &[bool],
     ) -> VistioResult<()>;
 
     /// Advance the simulation by one timestep.

@@ -185,7 +185,7 @@ All tests live in `crates/<name>/tests/<name>_tests.rs`. No inline `#[cfg(test)]
 | **Tier 0** | Foundation, traits, pipeline | ✅ Complete |
 | **Tier 1** | Real PD solver, spatial hash, `faer` | ✅ Complete |
 | **Tier 2** | Co-Rotational FEM, Bevy viewer, collision pipeline | ✅ Complete |
-| **Tier 3** | Discrete shell bending, anisotropic materials | 🔲 Planned |
+| **Tier 3** | Discrete shell bending, anisotropic materials | ⚠️ Partial (Instability) |
 | **Tier 4** | IPC barriers, CCD, robust self-collision | 🔲 Planned |
 | **Tier 5** | GPU acceleration (`wgpu`) | 🔲 Planned |
 | **Tier 6** | Adaptive remeshing | 🔲 Planned |

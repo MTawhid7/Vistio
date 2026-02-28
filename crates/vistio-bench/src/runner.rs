@@ -64,21 +64,35 @@ impl BenchmarkRunner {
 
         // Choose init path based on whether a material is specified
         let vertex_mass = if let Some(ref properties) = scenario.material {
-            // Tier 2 path: material-aware initialization
-            let model = Box::new(CoRotationalModel::new());
-            solver.init_with_material(
-                &scenario.garment,
-                &topology,
-                &scenario.config,
-                properties,
-                model,
-            )?;
+            // Tier 3 path: when material is anisotropic, use Discrete Shells + anisotropic model
+            // Tier 2 path: when material is isotropic, use dihedral + co-rotational model
+            if properties.is_anisotropic() {
+                let model = Box::new(vistio_material::AnisotropicCoRotationalModel::from_properties(properties));
+                solver.init_with_material_tier3(
+                    &scenario.garment,
+                    &topology,
+                    &scenario.config,
+                    properties,
+                    model,
+                    &scenario.pinned,
+                )?;
+            } else {
+                let model = Box::new(CoRotationalModel::new());
+                solver.init_with_material(
+                    &scenario.garment,
+                    &topology,
+                    &scenario.config,
+                    properties,
+                    model,
+                    &scenario.pinned,
+                )?;
+            }
             // Derive mass from material
             let total_area = compute_mesh_area(&scenario.garment);
             properties.mass_per_vertex(scenario.garment.vertex_count(), total_area)
         } else {
             // Tier 1 path: standard initialization
-            solver.init(&scenario.garment, &topology, &scenario.config)?;
+            solver.init(&scenario.garment, &topology, &scenario.config, &scenario.pinned)?;
             scenario.vertex_mass
         };
 
@@ -130,6 +144,24 @@ impl BenchmarkRunner {
                 (dx * dx + dy * dy + dz * dz).sqrt()
             })
             .fold(0.0f32, f32::max);
+
+        // --- DEBUG DUMP: Write final mesh out! ---
+        if scenario.kind == crate::scenarios::ScenarioKind::HangingSheet {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::File::create("/tmp/end_mesh.obj") {
+                for i in 0..state.vertex_count {
+                    let _ = writeln!(f, "v {} {} {}", state.pos_x[i], state.pos_y[i], state.pos_z[i]);
+                }
+                for t in 0..scenario.garment.triangle_count() {
+                    let idx = t * 3;
+                    let i0 = scenario.garment.indices[idx] + 1;
+                    let i1 = scenario.garment.indices[idx + 1] + 1;
+                    let i2 = scenario.garment.indices[idx + 2] + 1;
+                    let _ = writeln!(f, "f {} {} {}", i0, i1, i2);
+                }
+            }
+        }
+        // -----------------------------------------
 
         let avg_step = if step_times.is_empty() {
             0.0

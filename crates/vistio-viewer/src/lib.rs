@@ -54,6 +54,7 @@ pub fn launch_viewer(scenario: Scenario) -> Result<(), Box<dyn std::error::Error
             &scenario.config,
             properties,
             model,
+            &scenario.pinned,
         ).map_err(|e| format!("Solver init failed: {e}"))?;
 
         let total_area: f32 = {
@@ -72,7 +73,7 @@ pub fn launch_viewer(scenario: Scenario) -> Result<(), Box<dyn std::error::Error
         };
         properties.mass_per_vertex(scenario.garment.vertex_count(), total_area)
     } else {
-        solver.init(&scenario.garment, &topology, &scenario.config)
+        solver.init(&scenario.garment, &topology, &scenario.config, &scenario.pinned)
             .map_err(|e| format!("Solver init failed: {e}"))?;
         scenario.vertex_mass
     };

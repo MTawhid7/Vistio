@@ -188,7 +188,7 @@ fn ab_benchmark_pd_vs_stub() {
     // --- Run PD Stub ---
     let mut stub_state = SimulationState::from_mesh(&mesh, 0.01, &pinned).unwrap();
     let mut stub = ProjectiveDynamicsStub::new();
-    stub.init(&mesh, &topo, &config).unwrap();
+    stub.init(&mesh, &topo, &config, &pinned).unwrap();
 
     for _ in 0..steps {
         stub.step(&mut stub_state, dt).unwrap();
@@ -197,7 +197,7 @@ fn ab_benchmark_pd_vs_stub() {
     // --- Run full PD Solver ---
     let mut pd_state = SimulationState::from_mesh(&mesh, 0.01, &pinned).unwrap();
     let mut pd = ProjectiveDynamicsSolver::new();
-    pd.init(&mesh, &topo, &config).unwrap();
+    pd.init(&mesh, &topo, &config, &pinned).unwrap();
 
     let mut total_pd_iters = 0_u32;
     for _ in 0..steps {

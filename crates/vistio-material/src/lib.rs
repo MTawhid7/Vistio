@@ -13,6 +13,7 @@
 //! meaningful parameters derived from Kawabata Evaluation System (KES)
 //! measurements.
 
+pub mod anisotropic;
 pub mod corotational;
 pub mod database;
 pub mod isotropic;
@@ -20,6 +21,7 @@ pub mod orthotropic;
 pub mod properties;
 pub mod traits;
 
+pub use anisotropic::AnisotropicCoRotationalModel;
 pub use corotational::CoRotationalModel;
 pub use database::MaterialDatabase;
 pub use isotropic::IsotropicLinearModel;

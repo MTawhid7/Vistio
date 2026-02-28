@@ -207,11 +207,17 @@ impl BendingData {
         }
         let axis = edge / edge_len;
 
-        // Correction: rotate wing vertices by half the angle difference each
-        // (toward the rest configuration)
-        let half_corr = -angle_diff * 0.5;
+        // Correction: rotate wing vertices toward the rest configuration
+        let e_dir = axis;
+        let to_a = p_wa - p_v0;
+        let to_b = p_wb - p_v0;
+        let p_a = to_a - e_dir * to_a.dot(e_dir);
+        let p_b = to_b - e_dir * to_b.dot(e_dir);
 
-        // Edge midpoint as rotation center
+        let n_cross = p_a.cross(p_b);
+        let sign = if n_cross.dot(e_dir) >= 0.0 { 1.0 } else { -1.0 };
+
+        let half_corr = angle_diff * 0.5 * sign;
         let mid = (p_v0 + p_v1) * 0.5;
 
         let wa_proj = rotate_around_axis(p_wa, mid, axis, half_corr);

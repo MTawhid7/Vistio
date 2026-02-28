@@ -53,6 +53,7 @@ impl SolverStrategy for ProjectiveDynamicsStub {
         _mesh: &TriangleMesh,
         _topology: &Topology,
         config: &SolverConfig,
+        _pinned: &[bool],
     ) -> VistioResult<()> {
         self.config = config.clone();
         self.initialized = true;

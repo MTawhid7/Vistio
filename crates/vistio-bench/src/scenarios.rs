@@ -93,7 +93,7 @@ impl Scenario {
             body: None,
             pinned,
             config: SolverConfig::default(),
-            timesteps: 120, // 2 seconds at 60fps
+            timesteps: 600, // 10 seconds at 60fps
             dt: 1.0 / 60.0,
             vertex_mass: 0.002, // ~200g/m² cloth, distributed across 441 vertices
             material: None,

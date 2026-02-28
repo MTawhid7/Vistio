@@ -72,5 +72,27 @@ impl FabricProperties {
         // density is g/m², convert to kg/m² then distribute
         (self.density / 1000.0) * total_area / n as f32
     }
-}
 
+    /// Returns true if the fabric has anisotropic stretch stiffness (warp ≠ weft).
+    ///
+    /// A ratio difference > 5% is considered anisotropic.
+    pub fn is_anisotropic(&self) -> bool {
+        let ratio = if self.stretch_stiffness_weft > 1e-8 {
+            self.stretch_stiffness_warp / self.stretch_stiffness_weft
+        } else {
+            1.0
+        };
+        (ratio - 1.0).abs() > 0.05
+    }
+
+    /// Returns the ratio of warp to weft stretch stiffness.
+    ///
+    /// Values > 1.0 mean warp is stiffer; < 1.0 means weft is stiffer.
+    pub fn warp_weft_ratio(&self) -> f32 {
+        if self.stretch_stiffness_weft > 1e-8 {
+            self.stretch_stiffness_warp / self.stretch_stiffness_weft
+        } else {
+            1.0
+        }
+    }
+}

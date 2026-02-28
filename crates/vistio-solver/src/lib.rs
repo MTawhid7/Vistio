@@ -13,6 +13,7 @@
 pub mod assembly;
 pub mod bending;
 pub mod config;
+pub mod discrete_shells;
 pub mod element;
 pub mod pd_solver;
 pub mod pd_stub;
