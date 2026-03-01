@@ -164,3 +164,76 @@ pub fn uv_sphere(radius: f32, stacks: usize, slices: usize) -> TriangleMesh {
 
     mesh
 }
+
+/// Generates a flat circular mesh in the XY plane.
+///
+/// # Arguments
+/// - `radius` — Radius of the circle.
+/// - `segments` — Number of angular subdivisions.
+/// - `rings` — Number of concentric radial subdivisions.
+pub fn circular_grid(radius: f32, segments: usize, rings: usize) -> TriangleMesh {
+    let vertex_count = 1 + rings * segments;
+    let tri_count = segments + (rings - 1) * segments * 2;
+    let mut mesh = TriangleMesh::with_capacity(vertex_count, tri_count);
+
+    mesh.pos_x.push(0.0);
+    mesh.pos_y.push(0.0);
+    mesh.pos_z.push(0.0);
+    mesh.normal_x.push(0.0);
+    mesh.normal_y.push(0.0);
+    mesh.normal_z.push(1.0);
+    mesh.uv_u.push(0.5);
+    mesh.uv_v.push(0.5);
+
+    for r in 1..=rings {
+        let current_radius = radius * (r as f32 / rings as f32);
+        for s in 0..segments {
+            let theta = 2.0 * std::f32::consts::PI * (s as f32 / segments as f32);
+            let x = current_radius * theta.cos();
+            let y = current_radius * theta.sin();
+
+            mesh.pos_x.push(x);
+            mesh.pos_y.push(y);
+            mesh.pos_z.push(0.0);
+            mesh.normal_x.push(0.0);
+            mesh.normal_y.push(0.0);
+            mesh.normal_z.push(1.0);
+            mesh.uv_u.push(0.5 + 0.5 * (x / radius));
+            mesh.uv_v.push(0.5 + 0.5 * (y / radius));
+        }
+    }
+
+    for s in 0..segments {
+        let v0 = 0;
+        let v1 = 1 + s;
+        let v2 = 1 + (s + 1) % segments;
+        mesh.indices.push(v0 as u32);
+        mesh.indices.push(v1 as u32);
+        mesh.indices.push(v2 as u32);
+        mesh.material_ids.push(MaterialId(0));
+    }
+
+    for r in 1..rings {
+        let ring_start = 1 + (r - 1) * segments;
+        let next_ring_start = 1 + r * segments;
+        for s in 0..segments {
+            let next_s = (s + 1) % segments;
+            let v0 = ring_start + s;
+            let v1 = ring_start + next_s;
+            let v2 = next_ring_start + s;
+            let v3 = next_ring_start + next_s;
+
+            mesh.indices.push(v0 as u32);
+            mesh.indices.push(v1 as u32);
+            mesh.indices.push(v3 as u32);
+            mesh.material_ids.push(MaterialId(0));
+
+            mesh.indices.push(v0 as u32);
+            mesh.indices.push(v3 as u32);
+            mesh.indices.push(v2 as u32);
+            mesh.material_ids.push(MaterialId(0));
+        }
+    }
+
+    mesh
+}

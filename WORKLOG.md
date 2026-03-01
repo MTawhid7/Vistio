@@ -330,6 +330,39 @@ The hanging sheet simulation no longer exhibits horizontal z-axis displacement b
 - [ ] **Tier 4:** Continuous Collision Detection (CCD) for tunneling prevention.
 - [ ] **Tier 4:** Re-introduce `self_fold` scenario with IPC-based self-collision.
 
+---
+
+## 2026-03-01
+
+### Current State
+
+**Tier 3 — Analytical Primitives & Uniaxial Stretch (Complete).**
+Tier 3 implementation is officially complete. We have successfully scaffolded and verified three new geometry and constraint setups representing canonical industry drape and tensile tests (Cusick Drape, Cantilever Bending, and Uniaxial Stretch). Furthermore, we fixed critical magnitude masking issues in the Anisotropic solver, allowing proper visualization of mathematical tension differences.
+
+### Progress
+
+- **Geometry Generators & Scenarios:** Added ISO 9073-9 (Cusick Drape), ASTM D1388 (Cantilever Bending), and Uniaxial Tensile Stretch procedural geometries and pinning setups.
+- **Analytical Colliders:** Implemented `CylinderCollider` and `BoxCollider` inside the `CollisionPipeline` to represent physical test setups.
+- **Anisotropic Material Verification:** Identified and fixed a scaling issue where the `pd_solver` system matrix assembled weights 1000x greater than the local geometric projection forces, overshadowing KES anisotropic differences.
+
+### Key Observations
+
+- **The Curse of Implicit Tunneling:** The `ProjectiveDynamicsSolver` uses a global solve strategy that allows for phenomenally large and stable timesteps (`dt = 1/60s`). However, because `CollisionPipeline` utilizes an old-school explicit position projection *after* the implicit step resolves, high-velocity nodes falling under gravity frequently completely tunnel through analytical colliders before the collision function even has a chance to execute.
+- **Mathematical vs Visual Material Displacements:** When running the Uniaxial Stretch simulation to 50% strain using the `vistio-bench` headless CLI, we discovered that highly stiff (Denim_14oz) and highly flexible (Silk_Charmeuse) geometries looked visually identical in the viewer.
+  - **The Physics Insight:** Because the Uniaxial Tensile test physically pins the stretching boundaries to a rigid puller arm, the visual mesh is mathematically constrained from 'necking' via the Poisson effect.
+  - **The Mathematical Validation:** Despite looking identical, checking the `Final Kinetic Energy` in the telemetry traces exposed that the internal tension building up in the Denim configuration (`1.06e-4`) was nearly an order of magnitude higher than the flexible Silk Charmeuse (`1.62e-5`).
+
+### Issues & Decisions
+
+- **Issue:** Advanced dynamic wrinkling cascades cause points to cluster or explode outwards when pushed rapidly by the explicit collision heuristic.
+- **Decision:** True stability is mathematically impossible without incorporating collision boundaries into the implicit PD solver matrix itself (via Barrier Methods/IPC). Deferred all collision-heavy visualization (Cusick Drape, Self Fold) to Tier 4.
+
+### Next Steps
+
+- [ ] **Tier 4:** Implement Incremental Potential Contact (IPC). Replace the entire heuristic explicit `CollisionPipeline` positional projection with $C^2$ continuous logarithmic barrier functions.
+- [ ] **Tier 4:** Continuous Collision Detection (CCD). Required for the IPC solver sequence to guarantee that rapid timesteps do not miss intersecting planes.
+- [ ] **Tier 4:** Re-introduce `self_fold` and `cusick_drape` visual tests.
+
 <!-- TEMPLATE: Copy the block below for each new day -->
 
 <!--

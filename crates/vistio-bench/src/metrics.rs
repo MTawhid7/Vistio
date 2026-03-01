@@ -27,18 +27,19 @@ pub struct BenchmarkMetrics {
     pub vertex_count: usize,
     /// Triangle count.
     pub triangle_count: usize,
+    pub drape_coefficient: f32,
 }
 
 impl BenchmarkMetrics {
     /// Format as a CSV row (header + data).
     pub fn to_csv_header() -> String {
-        "scenario,vertex_count,triangle_count,timesteps,total_wall_time_s,avg_step_ms,min_step_ms,max_step_ms,final_ke,max_displacement,avg_iterations".to_string()
+        "scenario,vertex_count,triangle_count,timesteps,total_wall_time_s,avg_step_ms,min_step_ms,max_step_ms,final_ke,max_displacement,avg_iterations,drape_coefficient_pct".to_string()
     }
 
     /// Format this metrics instance as a CSV data row.
     pub fn to_csv_row(&self) -> String {
         format!(
-            "{},{},{},{},{:.6},{:.4},{:.4},{:.4},{:.6e},{:.6},{:.1}",
+            "{},{},{},{},{:.6},{:.4},{:.4},{:.4},{:.6e},{:.6},{:.1},{:.2}",
             self.scenario,
             self.vertex_count,
             self.triangle_count,
@@ -50,6 +51,7 @@ impl BenchmarkMetrics {
             self.final_kinetic_energy,
             self.max_displacement,
             self.avg_iterations,
+            self.drape_coefficient,
         )
     }
 

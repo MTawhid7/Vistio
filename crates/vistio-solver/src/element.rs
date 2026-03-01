@@ -103,7 +103,7 @@ impl ElementData {
         mesh: &TriangleMesh,
         properties: &vistio_material::FabricProperties,
     ) -> Self {
-        let stiffness = properties.avg_stretch_stiffness() * 1000.0;
+        let stiffness = properties.avg_stretch_stiffness() * 10.0; // scale down slightly so it balances with the local projection instead of overpowering it
         Self::from_mesh(mesh, stiffness)
     }
 

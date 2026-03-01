@@ -12,6 +12,8 @@ use crate::ground_plane::GroundPlane;
 use crate::narrow::NarrowPhase;
 use crate::response::{ContactResponse, ContactResult};
 use crate::sphere::SphereCollider;
+use crate::cylinder::CylinderCollider;
+use crate::box_collider::BoxCollider;
 use crate::self_collision::{SelfCollisionSystem, SelfCollisionResult};
 
 /// Unified collision pipeline: broad → narrow → response.
@@ -33,6 +35,8 @@ pub struct CollisionPipeline {
     pub ground: Option<GroundPlane>,
     /// Optional analytical sphere collider.
     pub sphere: Option<SphereCollider>,
+    pub cylinder: Option<CylinderCollider>,
+    pub box_collider: Option<BoxCollider>,
     /// Optional self-collision system.
     pub self_collision: Option<SelfCollisionSystem>,
     /// Reference mesh (for triangle queries in narrow phase).
@@ -57,6 +61,8 @@ impl CollisionPipeline {
             stiffness,
             ground: None,
             sphere: None,
+            cylinder: None,
+            box_collider: None,
             self_collision: None,
             mesh,
         }
@@ -69,6 +75,16 @@ impl CollisionPipeline {
     }
 
     /// Add an optional analytical sphere collider.
+        pub fn with_cylinder(mut self, center_x: f32, center_z: f32, top_y: f32, radius: f32) -> Self {
+        self.cylinder = Some(CylinderCollider::new(center_x, center_z, top_y, radius));
+        self
+    }
+
+    pub fn with_box(mut self, min_x: f32, max_x: f32, min_y: f32, max_y: f32, min_z: f32, max_z: f32) -> Self {
+        self.box_collider = Some(BoxCollider::new(min_x, max_x, min_y, max_y, min_z, max_z));
+        self
+    }
+
     pub fn with_sphere(mut self, center: vistio_math::Vec3, radius: f32) -> Self {
         self.sphere = Some(SphereCollider::new(center, radius));
         self
@@ -92,15 +108,21 @@ impl CollisionPipeline {
 
     /// Run the full collision pipeline: broad → narrow → response + ground.
     pub fn step(&mut self, state: &mut SimulationState) -> VistioResult<CollisionStepResult> {
-        // 1. Broad phase: update acceleration structure and query pairs
-        self.broad.update(state, self.thickness)?;
-        let candidates = self.broad.query_pairs();
+        let mut candidates = Vec::new();
+        let mut contacts = Vec::new();
+        let mut mesh_result = ContactResult { resolved_count: 0, max_residual_penetration: 0.0, total_force_magnitude: 0.0 };
 
-        // 2. Narrow phase: exact proximity tests
-        let contacts = self.narrow.detect(&candidates, state, &self.mesh, self.thickness)?;
+        if self.thickness > 0.0 && self.stiffness > 0.0 {
+            // 1. Broad phase: update acceleration structure and query pairs
+            self.broad.update(state, self.thickness)?;
+            candidates = self.broad.query_pairs();
 
-        // 3. Contact response: resolve penetrations
-        let mesh_result = self.response.resolve(&contacts, state, self.stiffness)?;
+            // 2. Narrow phase: exact proximity tests
+            contacts = self.narrow.detect(&candidates, state, &self.mesh, self.thickness)?;
+
+            // 3. Contact response: resolve penetrations
+            mesh_result = self.response.resolve(&contacts, state, self.stiffness)?;
+        }
 
         // 4. Ground plane (if present) — hard constraint, must run first
         let ground_result = if let Some(ref ground) = self.ground {
@@ -136,6 +158,18 @@ impl CollisionPipeline {
             }
         };
 
+                let cylinder_result = if let Some(ref cylinder) = self.cylinder {
+            cylinder.resolve(state)
+        } else {
+            ContactResult { resolved_count: 0, max_residual_penetration: 0.0, total_force_magnitude: 0.0 }
+        };
+
+        let box_result = if let Some(ref box_col) = self.box_collider {
+            box_col.resolve(state)
+        } else {
+            ContactResult { resolved_count: 0, max_residual_penetration: 0.0, total_force_magnitude: 0.0 }
+        };
+
         let candidate_count = candidates.len() as u32;
 
         Ok(CollisionStepResult {
@@ -144,6 +178,8 @@ impl CollisionPipeline {
             mesh_result,
             ground_result,
             sphere_result,
+            cylinder_result,
+            box_result,
             self_collision_result,
         })
     }
@@ -162,6 +198,8 @@ pub struct CollisionStepResult {
     pub ground_result: ContactResult,
     /// Sphere collision resolution result.
     pub sphere_result: ContactResult,
+    pub cylinder_result: ContactResult,
+    pub box_result: ContactResult,
     /// Result from self collision resolution.
     pub self_collision_result: Option<SelfCollisionResult>,
 }

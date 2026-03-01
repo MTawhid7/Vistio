@@ -32,6 +32,7 @@ struct SimRunner {
 struct SceneData {
     body: Option<vistio_mesh::TriangleMesh>,
     ground_height: f32,
+    scenario_kind: vistio_bench::scenarios::ScenarioKind,
 }
 
 /// Component to tag the Bevy cloth entity.
@@ -89,8 +90,8 @@ pub fn launch_viewer(scenario: Scenario) -> Result<(), Box<dyn std::error::Error
         Box::new(VertexTriangleTest),
         Box::new(ProjectionContactResponse),
         scenario.garment.clone(),
-        0.01,
-        1.0,
+        0.0,
+        0.0,
     );
 
     let ground_height: f32;
@@ -100,6 +101,20 @@ pub fn launch_viewer(scenario: Scenario) -> Result<(), Box<dyn std::error::Error
             pipeline = pipeline
                 .with_ground(-0.3)
                 .with_sphere(vistio_math::Vec3::new(0.0, 0.0, 0.0), 0.3);
+        },
+        vistio_bench::scenarios::ScenarioKind::CusickDrape => {
+            ground_height = -0.3; // Give it room to fall
+            pipeline = pipeline
+                .with_ground(-0.3)
+                .with_cylinder(0.0, 0.0, 0.3, 0.09); // Base at y=-0.3, radius 0.09m, height 0.6m (top at y=0.3)
+        },
+        vistio_bench::scenarios::ScenarioKind::CantileverBending => {
+            ground_height = 0.5; // Ledge top
+            pipeline = pipeline
+                .with_ground(-0.5) // Real ground
+                .with_box(
+                    -0.25, 0.0, 0.0, 0.5, -0.25, 0.25
+                );
         },
         _ => {
             ground_height = -0.3;
@@ -122,6 +137,7 @@ pub fn launch_viewer(scenario: Scenario) -> Result<(), Box<dyn std::error::Error
     let scene_data = SceneData {
         body: scenario.body.clone(),
         ground_height,
+        scenario_kind: scenario.kind,
     };
 
     let mut app = App::new();
@@ -203,11 +219,25 @@ fn compute_smooth_normals(
 
 fn simulate_cloth(
     mut runner: ResMut<SimRunner>,
+    scene_data: Res<SceneData>,
     mut meshes: ResMut<Assets<Mesh>>,
     query: Query<(Entity, &Handle<Mesh>), With<ClothMesh>>,
 ) {
     let _start = Instant::now();
     let dt = runner.dt;
+
+    if scene_data.scenario_kind == vistio_bench::scenarios::ScenarioKind::UniaxialStretch {
+        // Stop pulling after 120 frames to hit exactly 50% strain without infinite tearing
+        if runner.current_step < 120 {
+            let stretch_amount = 0.25 / 120.0;
+            for i in 0..runner.state.vertex_count {
+                if runner.state.pos_x[i] > 0.249 {
+                    runner.state.pos_x[i] += stretch_amount;
+                    runner.state.vel_x[i] = stretch_amount / dt;
+                }
+            }
+        }
+    }
 
     // Borrow parts independently
     let SimRunner { ref mut solver, ref mut state, ref mut collision, .. } = *runner;
@@ -356,6 +386,42 @@ fn setup_scene(
             material: body_material,
             ..default()
         });
+    }
+
+    // 2.6 Setup Cylinder/Box for specific scenarios (Visual Geometry)
+    match scene_data.scenario_kind {
+        vistio_bench::scenarios::ScenarioKind::CusickDrape => {
+            let pedestal_material = materials.add(StandardMaterial {
+                base_color: Color::srgb(0.5, 0.5, 0.55),
+                perceptual_roughness: 0.7,
+                ..default()
+            });
+            // Cylinder: radius 0.09, height 0.6. Centered at origin of its local transform.
+            // Our collision cylinder starts at y=-0.3 and goes up by height 0.6 (top at y=0.3).
+            // Bevy's cylinder is centered at 0. So we place it at y = -0.3 + (0.6 / 2) = 0.0.
+            commands.spawn(PbrBundle {
+                mesh: meshes.add(Cylinder::new(0.09, 0.6)),
+                material: pedestal_material,
+                transform: Transform::from_xyz(0.0, 0.0, 0.0),
+                ..default()
+            });
+        },
+        vistio_bench::scenarios::ScenarioKind::CantileverBending => {
+            let ledge_material = materials.add(StandardMaterial {
+                base_color: Color::srgb(0.6, 0.4, 0.2), // Wood-like
+                perceptual_roughness: 0.9,
+                ..default()
+            });
+            // Box from (-0.25, 0.0, -0.25) to (0.0, 0.5, 0.25)
+            // Center: (-0.125, 0.25, 0.0), Size: (0.25, 0.5, 0.5)
+            commands.spawn(PbrBundle {
+                mesh: meshes.add(Cuboid::new(0.25, 0.5, 0.5)),
+                material: ledge_material,
+                transform: Transform::from_xyz(-0.125, 0.25, 0.0),
+                ..default()
+            });
+        },
+        _ => {}
     }
 
     // 3. Setup Directional Light (Sun/Key Light) with Shadows

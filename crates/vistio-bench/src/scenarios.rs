@@ -20,6 +20,9 @@ pub enum ScenarioKind {
     HangingSheet,
     /// Cloth draped over a sphere.
     SphereDrape,
+    CusickDrape,
+    CantileverBending,
+    UniaxialStretch,
 }
 
 impl ScenarioKind {
@@ -28,6 +31,9 @@ impl ScenarioKind {
         &[
             ScenarioKind::HangingSheet,
             ScenarioKind::SphereDrape,
+            ScenarioKind::CusickDrape,
+            ScenarioKind::CantileverBending,
+            ScenarioKind::UniaxialStretch,
         ]
     }
 
@@ -36,6 +42,9 @@ impl ScenarioKind {
         match self {
             ScenarioKind::HangingSheet => "hanging_sheet",
             ScenarioKind::SphereDrape => "sphere_drape",
+            ScenarioKind::CusickDrape => "cusick_drape",
+            ScenarioKind::CantileverBending => "cantilever_bending",
+            ScenarioKind::UniaxialStretch => "uniaxial_stretch",
         }
     }
 }
@@ -130,10 +139,85 @@ impl Scenario {
     }
 
     /// Create a scenario by kind.
+
+    pub fn cusick_drape() -> Self {
+        let mut garment = vistio_mesh::generators::circular_grid(0.30, 64, 15);
+        let n = garment.vertex_count();
+        for i in 0..n {
+            garment.pos_z[i] = garment.pos_y[i];
+            garment.pos_y[i] = 0.4;
+        }
+        Self {
+            kind: ScenarioKind::CusickDrape,
+            garment,
+            body: None,
+            pinned: vec![false; n],
+            config: SolverConfig::default(),
+            timesteps: 300,
+            dt: 1.0 / 60.0,
+            vertex_mass: 0.002,
+            material: None,
+        }
+    }
+
+    pub fn cantilever_bending() -> Self {
+        let cols = 5;
+        let rows = 40;
+        let mut garment = vistio_mesh::generators::quad_grid(cols, rows, 0.05, 0.20);
+        let n = garment.vertex_count();
+        for i in 0..n {
+            garment.pos_z[i] = garment.pos_y[i] + 0.10;
+            garment.pos_y[i] = 1.0;
+        }
+        let mut pinned = vec![false; n];
+        for i in 0..=cols { pinned[i] = true; }
+        Self {
+            kind: ScenarioKind::CantileverBending,
+            garment,
+            body: None,
+            pinned,
+            config: SolverConfig::default(),
+            timesteps: 300,
+            dt: 1.0 / 60.0,
+            vertex_mass: 0.0001,
+            material: None,
+        }
+    }
+
+    pub fn uniaxial_stretch() -> Self {
+        let cols = 15;
+        let rows = 15;
+        let mut garment = vistio_mesh::generators::quad_grid(cols, rows, 0.50, 0.50);
+        let n = garment.vertex_count();
+        for i in 0..n {
+            garment.pos_z[i] = garment.pos_y[i];
+            garment.pos_y[i] = 1.0;
+        }
+        let mut pinned = vec![false; n];
+        for i in 0..n {
+            if garment.pos_x[i] < -0.249 { pinned[i] = true; }
+            if garment.pos_x[i] >  0.249 { pinned[i] = true; }
+        }
+        Self {
+            kind: ScenarioKind::UniaxialStretch,
+            garment,
+            body: None,
+            pinned,
+            config: SolverConfig::default(),
+            timesteps: 120,
+            dt: 1.0 / 60.0,
+            vertex_mass: 0.0005,
+            material: None,
+        }
+    }
+
     pub fn from_kind(kind: ScenarioKind) -> Self {
         match kind {
             ScenarioKind::HangingSheet => Self::hanging_sheet(),
             ScenarioKind::SphereDrape => Self::sphere_drape(),
+            ScenarioKind::CusickDrape => Self::cusick_drape(),
+            ScenarioKind::CantileverBending => Self::cantilever_bending(),
+            ScenarioKind::UniaxialStretch => Self::uniaxial_stretch(),
         }
     }
 

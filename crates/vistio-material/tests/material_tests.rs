@@ -365,8 +365,8 @@ fn anisotropic_corotational_compression_zero_energy() {
 
 #[test]
 fn anisotropic_warp_weft_different_energy() {
-    // Warp is much stiffer (10x) → stretching along warp should cost more
-    let model = AnisotropicCoRotationalModel::new(10.0, 1.0);
+    // Warp is much stiffer (9x) → stretching along warp should cost more
+    let model = AnisotropicCoRotationalModel::new(0.9, 0.1);
 
     // Stretch along warp direction (X-axis = col0)
     let f_warp = Mat3x2::from_cols(Vec3::X * 2.0, Vec3::Y);

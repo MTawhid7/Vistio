@@ -27,6 +27,8 @@ pub mod response;
 pub mod self_collision;
 pub mod spatial_hash;
 pub mod sphere;
+pub mod cylinder;
+pub mod box_collider;
 pub mod vertex_triangle;
 
 pub use broad::BroadPhase;
@@ -41,4 +43,6 @@ pub use response::ContactResponse;
 pub use self_collision::SelfCollisionSystem;
 pub use spatial_hash::SpatialHash;
 pub use sphere::SphereCollider;
+pub use cylinder::CylinderCollider;
+pub use box_collider::BoxCollider;
 pub use vertex_triangle::VertexTriangleTest;

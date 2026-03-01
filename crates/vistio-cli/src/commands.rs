@@ -51,9 +51,12 @@ pub fn benchmark(
         let kind = match scenario_name {
             "hanging_sheet" => ScenarioKind::HangingSheet,
             "sphere_drape" => ScenarioKind::SphereDrape,
+            "cusick_drape" => ScenarioKind::CusickDrape,
+            "cantilever_bending" => ScenarioKind::CantileverBending,
+            "uniaxial_stretch" => ScenarioKind::UniaxialStretch,
             other => {
                 eprintln!("Unknown scenario: {other}");
-                eprintln!("Available: hanging_sheet, sphere_drape, all");
+                eprintln!("Available: hanging_sheet, sphere_drape, cusick_drape, cantilever_bending, uniaxial_stretch, all");
                 return Err("Unknown scenario".into());
             }
         };
@@ -151,6 +154,9 @@ pub fn visualize(
     let kind = match scenario_name {
         "hanging_sheet" => vistio_bench::scenarios::ScenarioKind::HangingSheet,
         "sphere_drape" => vistio_bench::scenarios::ScenarioKind::SphereDrape,
+        "cusick_drape" => vistio_bench::scenarios::ScenarioKind::CusickDrape,
+        "cantilever_bending" => vistio_bench::scenarios::ScenarioKind::CantileverBending,
+        "uniaxial_stretch" => vistio_bench::scenarios::ScenarioKind::UniaxialStretch,
         other => {
             eprintln!("Unknown scenario: {other}");
             return Err("Unknown scenario".into());

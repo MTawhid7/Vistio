@@ -33,8 +33,8 @@ impl BenchmarkRunner {
             Box::new(VertexTriangleTest),
             Box::new(ProjectionContactResponse),
             scenario.garment.clone(),
-            0.01, // thickness
-            1.0,  // stiffness
+            0.0, // thickness (0.0 disables Tier 1 self-collision)
+            0.0,  // stiffness
         );
 
         match scenario.kind {
@@ -42,6 +42,15 @@ impl BenchmarkRunner {
                 pipeline = pipeline
                     .with_ground(-0.3)
                     .with_sphere(vistio_math::Vec3::new(0.0, 0.0, 0.0), 0.3);
+            },
+            ScenarioKind::CusickDrape => {
+                pipeline = pipeline
+                    .with_ground(-0.3)
+                    .with_cylinder(0.0, 0.0, 0.3, 0.09);
+            },
+            ScenarioKind::CantileverBending => {
+                pipeline = pipeline
+                    .with_box(-0.5, 0.5, 0.0, 0.99, 0.0, 0.5);
             },
             _ => {
                 pipeline = pipeline.with_ground(-0.3);
@@ -119,7 +128,22 @@ impl BenchmarkRunner {
         let total_start = Instant::now();
 
         // Run timesteps
-        for _ in 0..scenario.timesteps {
+        for _step in 0..scenario.timesteps {
+            if scenario.kind == crate::scenarios::ScenarioKind::UniaxialStretch {
+                // Stretch from 0.50m width up to 0.75m width (+50% strain) over the total timesteps
+                let total_stretch = 0.25;
+                let stretch_amount = total_stretch / scenario.timesteps as f32;
+
+                for i in 0..state.vertex_count {
+                    // Update only rightmost pinned vertices
+                    if state.pos_x[i] > 0.249 {
+                        state.pos_x[i] += stretch_amount;
+                        state.vel_x[i] = stretch_amount / scenario.dt;
+                        // It is statically pinned via A matrix, so position update physically pulls it.
+                    }
+                }
+            }
+
             // Solver step (PD local-global iterations)
             let result: StepResult = solver.step(&mut state, scenario.dt)?;
             step_times.push(result.wall_time);
@@ -145,23 +169,7 @@ impl BenchmarkRunner {
             })
             .fold(0.0f32, f32::max);
 
-        // --- DEBUG DUMP: Write final mesh out! ---
-        if scenario.kind == crate::scenarios::ScenarioKind::HangingSheet {
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::File::create("/tmp/end_mesh.obj") {
-                for i in 0..state.vertex_count {
-                    let _ = writeln!(f, "v {} {} {}", state.pos_x[i], state.pos_y[i], state.pos_z[i]);
-                }
-                for t in 0..scenario.garment.triangle_count() {
-                    let idx = t * 3;
-                    let i0 = scenario.garment.indices[idx] + 1;
-                    let i1 = scenario.garment.indices[idx + 1] + 1;
-                    let i2 = scenario.garment.indices[idx + 2] + 1;
-                    let _ = writeln!(f, "f {} {} {}", i0, i1, i2);
-                }
-            }
-        }
-        // -----------------------------------------
+
 
         let avg_step = if step_times.is_empty() {
             0.0
@@ -176,6 +184,29 @@ impl BenchmarkRunner {
             0.0
         };
 
+        let mut drape_coefficient = 0.0;
+        if scenario.kind == crate::scenarios::ScenarioKind::CusickDrape {
+            let mut max_r_at_theta = vec![0.09_f32; 360];
+            for i in 0..state.vertex_count {
+                let x = state.pos_x[i];
+                let z = state.pos_z[i];
+                let r = (x * x + z * z).sqrt();
+                let theta = z.atan2(x);
+                let mut deg = (theta.to_degrees().round() as i32) % 360;
+                if deg < 0 { deg += 360; }
+                if r > max_r_at_theta[deg as usize] {
+                    max_r_at_theta[deg as usize] = r;
+                }
+            }
+            let mut shadow_area = 0.0;
+            for r in max_r_at_theta {
+                shadow_area += std::f32::consts::PI * r * r / 360.0;
+            }
+            let area_pedestal = std::f32::consts::PI * 0.09 * 0.09;
+            let area_flat = std::f32::consts::PI * 0.15 * 0.15;
+            drape_coefficient = 100.0 * (shadow_area - area_pedestal) / (area_flat - area_pedestal);
+        }
+
         Ok(BenchmarkMetrics {
             scenario: scenario.kind.name().to_string(),
             total_wall_time,
@@ -188,6 +219,7 @@ impl BenchmarkRunner {
             avg_iterations: avg_iter,
             vertex_count: scenario.garment.vertex_count(),
             triangle_count: scenario.garment.triangle_count(),
+            drape_coefficient,
         })
     }
 

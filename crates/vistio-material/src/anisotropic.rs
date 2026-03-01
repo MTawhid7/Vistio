@@ -84,11 +84,10 @@ impl ConstitutiveModel for AnisotropicCoRotationalModel {
         let polar = polar_decomposition_3x2(deformation_gradient);
         let (s0, s1) = polar.singular_values;
 
-        // Normalize warp/weft stiffness to [0, 1] range relative to each other.
-        // This controls how aggressively each principal direction is restored.
-        let max_k = self.warp_stiffness.max(self.weft_stiffness).max(1e-8);
-        let k_warp_norm = self.warp_stiffness / max_k;
-        let k_weft_norm = self.weft_stiffness / max_k;
+        // Clamp stiffness explicitly to [0, 1] instead of normalizing.
+        // Normalization washes out the true stiffness differences if max_k != 1.0!
+        let k_warp_norm = self.warp_stiffness.clamp(0.0, 1.0);
+        let k_weft_norm = self.weft_stiffness.clamp(0.0, 1.0);
 
         // The principal stretch directions (eigenvectors of S) are in the 2D
         // material space. The first eigenvector (v0) corresponds to the larger

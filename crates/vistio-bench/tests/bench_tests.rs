@@ -29,7 +29,7 @@ fn sphere_drape_setup() {
 
 #[test]
 fn all_scenarios() {
-    assert_eq!(ScenarioKind::all().len(), 2);
+    assert_eq!(ScenarioKind::all().len(), 5);
 }
 
 // ─── Runner Tests ─────────────────────────────────────────────
@@ -77,6 +77,7 @@ fn metrics_csv_output() {
         avg_iterations: 10.0,
         vertex_count: 441,
         triangle_count: 800,
+        drape_coefficient: 0.0,
     };
 
     let csv_row = metrics.to_csv_row();
@@ -99,6 +100,7 @@ fn metrics_csv_multi() {
         avg_iterations: 0.0,
         vertex_count: 4,
         triangle_count: 2,
+        drape_coefficient: 0.0,
     };
     let csv = BenchmarkMetrics::to_csv(&[m1]);
     let lines: Vec<&str> = csv.lines().collect();
@@ -120,6 +122,7 @@ fn metrics_json_round_trip() {
         avg_iterations: 5.0,
         vertex_count: 100,
         triangle_count: 180,
+        drape_coefficient: 0.0,
     };
     let json = serde_json::to_string(&metrics).unwrap();
     let recovered: BenchmarkMetrics = serde_json::from_str(&json).unwrap();
