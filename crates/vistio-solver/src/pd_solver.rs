@@ -633,6 +633,14 @@ impl ProjectiveDynamicsSolver {
         let _inv_dt2 = 1.0 / (dt * dt) as f64;
         let _prev_energy = f64::MAX;
 
+        // Track vertices that were in contact at *any point* during this AL step
+        // to ensure the post-solve velocity filter doesn't miss vertices that
+        // were forcefully ejected out of the barrier zone by the implicit step.
+        let mut ever_in_contact = vec![false; n];
+        let mut final_contact_nx = vec![0.0_f32; n];
+        let mut final_contact_ny = vec![0.0_f32; n];
+        let mut final_contact_nz = vec![0.0_f32; n];
+
         // ════════════════════════════════════════════════════════════
         // OUTER LOOP: Augmented Lagrangian
         // ════════════════════════════════════════════════════════════
@@ -650,6 +658,16 @@ impl ProjectiveDynamicsSolver {
             let barrier_forces = handler.detect_contacts(
                 &state.pos_x, &state.pos_y, &state.pos_z,
             );
+
+            // Accumulate ever-contact records so velocity filter doesn't miss ejected vertices
+            for i in 0..n {
+                if barrier_forces.in_contact[i] {
+                    ever_in_contact[i] = true;
+                    final_contact_nx[i] = barrier_forces.contact_nx[i];
+                    final_contact_ny[i] = barrier_forces.contact_ny[i];
+                    final_contact_nz[i] = barrier_forces.contact_nz[i];
+                }
+            }
 
             // Zero out stale lagrange multipliers for vertices no longer in contact
             for i in 0..n {
@@ -953,6 +971,15 @@ impl ProjectiveDynamicsSolver {
                 &state.pos_x, &state.pos_y, &state.pos_z,
             );
 
+            for i in 0..n {
+                if updated_forces.in_contact[i] {
+                    ever_in_contact[i] = true;
+                    final_contact_nx[i] = updated_forces.contact_nx[i];
+                    final_contact_ny[i] = updated_forces.contact_ny[i];
+                    final_contact_nz[i] = updated_forces.contact_nz[i];
+                }
+            }
+
             // === DIAGNOSTIC: per-AL-iteration metrics ===
             if _al_iter > 10 || updated_forces.max_violation.is_nan() {
                 let inv_dt = 1.0 / dt;
@@ -1010,11 +1037,11 @@ impl ProjectiveDynamicsSolver {
         let contact_damp = self.config.contact_damping;
         for i in 0..n {
             if state.inv_mass[i] == 0.0 { continue; }
-            if !updated_forces.in_contact[i] { continue; }
+            if !ever_in_contact[i] { continue; } // Ensures ejected vertices are still filtered
 
-            let nx = updated_forces.contact_nx[i];
-            let ny = updated_forces.contact_ny[i];
-            let nz = updated_forces.contact_nz[i];
+            let nx = final_contact_nx[i];
+            let ny = final_contact_ny[i];
+            let nz = final_contact_nz[i];
 
             // Check that we have a valid normal
             let n_len_sq = nx * nx + ny * ny + nz * nz;
@@ -1081,6 +1108,12 @@ impl ProjectiveDynamicsSolver {
                 state.vel_y[i] *= 1.0 - contact_damp;
                 state.vel_z[i] *= 1.0 - contact_damp;
             }
+        }
+
+        // Apply global contact-aware damping to dissipate internal structural
+        // trampolining (proxy for Rayleigh stiffness damping) during impacts.
+        if updated_forces.active_contacts > 0 {
+            state.damp_velocities(0.05); // 5% global energy dissipation per frame during contact
         }
 
         // Ground velocity enforcement as safety net for ground plane contact.

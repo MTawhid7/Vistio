@@ -52,14 +52,15 @@ fn main() -> VistioResult<()> {
     let mut solver = ProjectiveDynamicsSolver::new();
     solver.init(&scenario.garment, &topology, &scenario.config, &scenario.pinned)?;
 
-    let mut state = SimulationState::from_mesh(&scenario.garment, scenario.vertex_mass, &scenario.pinned)?;
+    let mut state = SimulationState::from_mesh(&scenario.garment, scenario.vertex_mass.clone(), &scenario.pinned)?;
 
+    let config = scenario.config.clone();
     let mut pipeline = CollisionPipeline::new(
         Box::new(vistio_contact::BvhBroadPhase::new(&scenario.garment)),
         Box::new(VertexTriangleTest),
         Box::new(ProjectionContactResponse),
         scenario.garment.clone(),
-        scenario.config.cloth_thickness,
+        config.cloth_thickness,
         0.0,
     ).with_self_collision(&topology, 1).with_ipc(true);
 

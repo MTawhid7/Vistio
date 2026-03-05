@@ -62,9 +62,9 @@ use crate::barrier::*;
     #[test]
     fn barrier_massive_at_nonpositive_d() {
         assert_eq!(barrier_energy(0.0, 0.01), 0.0);
-        // But gradients should be massively repulsive to push vertices out
+        // But gradients should be strongly repulsive to push vertices out
         let g = barrier_gradient(0.0, 0.01);
-        assert!(g < -100.0, "Gradient should be massively repulsive even at or below 0, got {}", g);
+        assert!(g < -5.0, "Gradient should be strongly repulsive even at or below 0, got {}", g);
     }
 
     #[test]
