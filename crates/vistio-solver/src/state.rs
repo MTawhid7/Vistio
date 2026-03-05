@@ -53,6 +53,14 @@ pub struct SimulationState {
     /// When set, the solver enforces this as a hard constraint
     /// during PD iterations, preventing vertices from going below.
     pub ground_height: Option<f32>,
+
+    // ─── Augmented Lagrangian (IPC) ──────────────────────────
+    /// Accumulated Lagrange multipliers (X).
+    pub al_lambda_x: Vec<f32>,
+    /// Accumulated Lagrange multipliers (Y).
+    pub al_lambda_y: Vec<f32>,
+    /// Accumulated Lagrange multipliers (Z).
+    pub al_lambda_z: Vec<f32>,
 }
 
 impl SimulationState {
@@ -125,6 +133,9 @@ impl SimulationState {
             mass,
             inv_mass,
             ground_height: None,
+            al_lambda_x: vec![0.0; n],
+            al_lambda_y: vec![0.0; n],
+            al_lambda_z: vec![0.0; n],
         })
     }
 

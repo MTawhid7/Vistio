@@ -33,7 +33,7 @@ pub fn barrier_energy(d: f32, d_hat: f32) -> f32 {
 ///
 /// Returns 0 when `d >= d_hat`.
 pub fn barrier_gradient(d: f32, d_hat: f32) -> f32 {
-    let d_c = d.clamp(1e-12, d_hat);
+    let d_c = d.max(d_hat * 1e-3).min(d_hat);
     if d_c >= d_hat {
         return 0.0;
     }
@@ -109,9 +109,10 @@ pub fn estimate_initial_kappa(
     if grad_at_mid < 1e-12 {
         return 1e4; // fallback
     }
-    let kappa = avg_mass * gravity_mag / (d_hat * grad_at_mid);
+    // Force F = kappa * \nabla B(d) * (2 * sqrt(d)). We want F ≈ mass * gravity.
+    let kappa = avg_mass * gravity_mag / (2.0 * d_mid.sqrt() * grad_at_mid);
     // Clamp to reasonable range
-    kappa.clamp(1e2, 1e8)
+    kappa.clamp(1e0, 1e6)
 }
 
 /// Compute barrier energy with a thickness offset (C-IPC).

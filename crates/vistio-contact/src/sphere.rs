@@ -113,6 +113,20 @@ impl SphereCollider {
         let mut active = 0;
         let mut max_violation = 0.0_f32;
 
+        #[cfg(debug_assertions)]
+        {
+            let min_d = (0..pos_x.len()).map(|i| {
+                let ddx = pos_x[i] - self.center.x;
+                let ddy = pos_y[i] - self.center.y;
+                let ddz = pos_z[i] - self.center.z;
+                (ddx*ddx + ddy*ddy + ddz*ddz).sqrt() - self.radius
+            }).fold(f32::INFINITY, f32::min);
+            if min_d < 0.1 {
+                eprintln!("    SPHERE: d_hat={:.6} kappa={:.1} min_d_surface={:.6} min_d²={:.8} d_surface<√d_hat={}",
+                    d_hat, kappa, min_d, min_d*min_d, min_d < d_hat.sqrt());
+            }
+        }
+
         for i in 0..pos_x.len() {
             let dx = pos_x[i] - self.center.x;
             let dy = pos_y[i] - self.center.y;
@@ -123,11 +137,10 @@ impl SphereCollider {
 
             if d_surface <= 0.0 {
                 // Inside the sphere -> violation!
+                // Violation is pure penetration depth.
                 max_violation = max_violation.max(-d_surface);
 
-                // Use a meaningful clamped distance so the chain-rule factor
-                // 2·d_clamped produces a real restoring force, not ≈0.
-                let d_clamped = 1e-4_f32;
+                let d_clamped = (-d_surface).max(1e-6);
                 let dist_sq = d_clamped * d_clamped;
                 active += 1;
                 let barrier_grad = crate::barrier::scaled_barrier_gradient(dist_sq, d_hat, kappa);
@@ -152,6 +165,9 @@ impl SphereCollider {
                     grad_x[i] += factor * (dx / r);
                     grad_y[i] += factor * (dy / r);
                     grad_z[i] += factor * (dz / r);
+
+                    // Do NOT report proximity as a constraint violation.
+                    // Doing so causes mu to grow to infinity during normal resting contact.
                 }
             }
         }

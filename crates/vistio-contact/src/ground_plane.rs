@@ -80,26 +80,28 @@ impl GroundPlane {
 
             if d_surface <= 0.0 {
                 // Inside the ground -> violation!
+                // Violation magnitude is pure penetration depth
                 max_violation = max_violation.max(-d_surface);
 
-                // Use a meaningful clamped distance so that the chain-rule
-                // factor 2·d_clamped produces a real restoring force, not ≈0.
-                let d_clamped = 1e-4_f32;
+                // Use actual penetration depth (clamped to a small minimum to avoid
+                // division issues) so the restoring force is proportional to depth.
+                let d_clamped = (-d_surface).max(1e-6);
                 let dist_sq = d_clamped * d_clamped;
                 active += 1;
                 let barrier_grad = crate::barrier::scaled_barrier_gradient(dist_sq, d_hat, kappa);
 
                 // Force = -∇barrier.  barrier_grad is ∂b/∂(d²) which is negative (repulsive).
                 // The spatial chain rule: ∂b/∂y = ∂b/∂(d²) · ∂(d²)/∂y = barrier_grad · 2·d · 1
-                // We want a strong UPWARD push, so we use the clamped d:
                 grad_y[i] += barrier_grad * 2.0 * d_clamped;
             } else {
                 let dist_sq = d_surface * d_surface;
                 if dist_sq < d_hat {
                     active += 1;
                     let barrier_grad = crate::barrier::scaled_barrier_gradient(dist_sq, d_hat, kappa);
-
                     grad_y[i] += barrier_grad * 2.0 * d_surface;
+
+                    // Do NOT report barrier-zone proximity as violation for AL loop
+                    // as it causes infinite penalty growth.
                 }
             }
         }

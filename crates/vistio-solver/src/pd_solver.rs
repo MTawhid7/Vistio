@@ -566,6 +566,34 @@ impl ProjectiveDynamicsSolver {
         // 1. Save previous positions
         state.save_previous();
 
+        // 1.5 CFL-like velocity clamp: ensure max step < barrier zone
+        // Without this, vertices at contact speed (~2.5 m/s) move 0.042m/frame,
+        // completely overshooting the barrier zone (√d_hat ≈ 0.032m).
+        // Clamping ensures vertices enter the barrier zone gradually.
+        {
+            let d_hat_eff = if self.config.compliant_contact {
+                self.config.barrier_d_hat * self.config.compliant_d_hat_scale
+            } else {
+                self.config.barrier_d_hat
+            };
+            // Max velocity so that v*dt ≤ 0.5 * √d_hat
+            let max_step = 0.5 * d_hat_eff.sqrt();
+            let max_vel = max_step / dt;
+            for i in 0..n {
+                if state.inv_mass[i] == 0.0 { continue; }
+                let v_sq = state.vel_x[i] * state.vel_x[i]
+                    + state.vel_y[i] * state.vel_y[i]
+                    + state.vel_z[i] * state.vel_z[i];
+                if v_sq > max_vel * max_vel {
+                    let v_mag = v_sq.sqrt();
+                    let scale = max_vel / v_mag;
+                    state.vel_x[i] *= scale;
+                    state.vel_y[i] *= scale;
+                    state.vel_z[i] *= scale;
+                }
+            }
+        }
+
         // 2. Predict: q_pred = pos + dt*vel + dt²*gravity
         state.predict(dt, self.config.gravity);
 
@@ -613,11 +641,24 @@ impl ProjectiveDynamicsSolver {
             let mut pd_max_disp_sq = 0.0_f32;
 
             // === IPC BARRIER FORCES ===
-            // Evaluate barrier forces ONCE per AL iteration to maintain
-            // the implicit stability of the local-global solve.
+            // Compute barrier forces ONCE per AL outer iteration.
+            // In Projective Dynamics, the system matrix A is constant and
+            // prefactored — the inner local-global loop MUST have a fixed RHS
+            // target to converge. Updating barrier forces every PD iteration
+            // makes the solver chase a moving target and diverge.
+            // The AL outer loop handles convergence by growing μ.
             let barrier_forces = handler.detect_contacts(
                 &state.pos_x, &state.pos_y, &state.pos_z,
             );
+
+            // Zero out stale lagrange multipliers for vertices no longer in contact
+            for i in 0..n {
+                if !barrier_forces.in_contact[i] {
+                    state.al_lambda_x[i] = 0.0;
+                    state.al_lambda_y[i] = 0.0;
+                    state.al_lambda_z[i] = 0.0;
+                }
+            }
 
             // ════════════════════════════════════════════════════════
             // INNER LOOP: PD local-global iterations
@@ -715,17 +756,16 @@ impl ProjectiveDynamicsSolver {
                 );
 
                 // === IPC BARRIER FORCES ===
-                // Use the barrier gradients evaluated at the start of the AL step
-
-                // Add barrier gradient contributions to RHS
+                // Add barrier gradient contributions and Lagrange multipliers
+                // (frozen for this AL iteration)
                 assemble_barrier_rhs(
-                    &mut rhs_x, &barrier_forces.grad_x, mu,
+                    &mut rhs_x, &barrier_forces.grad_x, &state.al_lambda_x, mu,
                 );
                 assemble_barrier_rhs(
-                    &mut rhs_y, &barrier_forces.grad_y, mu,
+                    &mut rhs_y, &barrier_forces.grad_y, &state.al_lambda_y, mu,
                 );
                 assemble_barrier_rhs(
-                    &mut rhs_z, &barrier_forces.grad_z, mu,
+                    &mut rhs_z, &barrier_forces.grad_z, &state.al_lambda_z, mu,
                 );
 
                 // === LAGGED IMPLICIT FRICTION (Phase 2.3) ===
@@ -913,10 +953,41 @@ impl ProjectiveDynamicsSolver {
                 &state.pos_x, &state.pos_y, &state.pos_z,
             );
 
+            // === DIAGNOSTIC: per-AL-iteration metrics ===
+            if _al_iter > 10 || updated_forces.max_violation.is_nan() {
+                let inv_dt = 1.0 / dt;
+                let mut ke_pos: f64 = 0.0;
+                let mut max_spd: f32 = 0.0;
+                for i in 0..n {
+                    if state.inv_mass[i] > 0.0 {
+                        let vx = (state.pos_x[i] - state.prev_x[i]) * inv_dt;
+                        let vy = (state.pos_y[i] - state.prev_y[i]) * inv_dt;
+                        let vz = (state.pos_z[i] - state.prev_z[i]) * inv_dt;
+                        let s = (vx*vx + vy*vy + vz*vz).sqrt();
+                        if s > max_spd { max_spd = s; }
+                        let m = (1.0 / state.inv_mass[i]) as f64;
+                        ke_pos += 0.5 * m * (vx*vx + vy*vy + vz*vz) as f64;
+                    }
+                }
+                println!("  AL[{}] mu={:.1e} violation={:.2e} contacts={} max_speed={:.4} KE={:.6}",
+                    _al_iter, mu, updated_forces.max_violation,
+                    updated_forces.active_contacts, max_spd, ke_pos);
+            }
+
             // Check AL convergence
             if updated_forces.max_violation < self.config.al_tolerance {
                 al_converged = true;
                 break;
+            }
+
+            // Phase A: True Augmented Lagrangian Multiplier Accumulation
+            // λ_{k+1} = λ_k + μ_k * ∇C(x)
+            for i in 0..n {
+                if updated_forces.in_contact[i] {
+                    state.al_lambda_x[i] += mu * updated_forces.grad_x[i];
+                    state.al_lambda_y[i] += mu * updated_forces.grad_y[i];
+                    state.al_lambda_z[i] += mu * updated_forces.grad_z[i];
+                }
             }
 
             // Increase penalty if constraints aren't sufficiently satisfied
@@ -955,11 +1026,11 @@ impl ProjectiveDynamicsSolver {
             // In cloth simulation, collisions are heavily inelastic (e=0).
             // The implicit barrier resolves positional penetration purely elastically,
             // resulting in an outward bounce velocity (v_dot_n > 0).
-            // To achieve a heavy, dead drape, we must remove the normal velocity
-            // regardless of whether the vertex is moving into or out of the collider,
-            // as long as it is within the microscopic barrier activation zone.
+            // To achieve a heavy, dead drape, we MUST remove the normal velocity
+            // regardless of sign, as the barrier's elastic energy would otherwise
+            // cause the cloth to bounce perpetually.
 
-            // 1. Remove normal velocity completely (perfectly inelastic)
+            // 1. Remove ALL normal velocity (perfectly inelastic, e=0)
             state.vel_x[i] -= v_dot_n * nx;
             state.vel_y[i] -= v_dot_n * ny;
             state.vel_z[i] -= v_dot_n * nz;
@@ -1012,7 +1083,21 @@ impl ProjectiveDynamicsSolver {
             }
         }
 
+        // Ground velocity enforcement as safety net for ground plane contact.
         state.enforce_ground_velocities();
+
+        // === DIAGNOSTIC: per-frame summary ===
+        #[cfg(debug_assertions)]
+        {
+            let ke = state.kinetic_energy();
+            let max_y = state.pos_y.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            let min_y = state.pos_y.iter().copied().fold(f32::INFINITY, f32::min);
+            let max_speed = (0..n).filter(|&i| state.inv_mass[i] > 0.0).map(|i| {
+                (state.vel_x[i]*state.vel_x[i] + state.vel_y[i]*state.vel_y[i] + state.vel_z[i]*state.vel_z[i]).sqrt()
+            }).fold(0.0_f32, f32::max);
+            eprintln!("FRAME: KE={:.8} y=[{:.4},{:.4}] max_speed={:.4} al_converged={} iters={}",
+                ke, min_y, max_y, max_speed, al_converged, total_iterations);
+        }
 
         // 6. Damping
         state.damp_velocities(self.config.damping);

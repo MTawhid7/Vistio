@@ -149,10 +149,10 @@ impl Default for SolverConfig {
             barrier_kappa: 0.0,   // 0 = adaptive estimation
             ipc_enabled: false,
             ccd_enabled: true,
-            al_max_iterations: 5,
+            al_max_iterations: 10,
             al_mu_initial: 1.0,
             al_mu_growth: 10.0,
-            al_tolerance: 1e-3,
+            al_tolerance: 1e-4,
             friction_coefficient: 0.4,
             contact_damping: 0.3,
             // Phase 3: Compliant contact defaults

@@ -486,6 +486,232 @@ Do not attempt incremental fixes. We must rigorously mathematically prove the an
 3. **Validate Matrix Scaling:** Output the magnitude of the barrier RHS vector component vs the membrane/bending RHS component to ensure the barrier forces aren't overflowing `f32` precision limits before the Cholesky solve.
 4. **Math Verification:** Verify if the derivative of the barrier potential $\nabla B(x)$ correctly matches the closed-form geometry derivative of the exact closest point.
 
+## 2026-03-05 (Comprehensive Technical Analysis & Debugging Session)
+
+### Current State
+
+**Tier 4 — Stabilization Phase (Diagnostic Results Captured, Fixes Not Yet Successful).**
+A comprehensive analysis of the entire codebase was conducted, identifying 13 distinct implementation flaws. Five targeted fixes were attempted across `pd_solver.rs`, `config.rs`, `ground_plane.rs`, and `sphere.rs`. Detailed per-frame diagnostic instrumentation was added and exercised, revealing the **previously unknown true root cause** of the bouncing/explosion cycle. However, the definitive fix has not yet been achieved — the simulation still bounces on contact and eventually diverges. All diagnostic data and root cause analysis are documented below for the next debugging session.
+
+### 1. Comprehensive Code Analysis (13 Flaws Identified)
+
+A full technical analysis was conducted across all solver and contact crates. The following implementation flaws were catalogued:
+
+| # | Flaw | File | Severity |
+|---|------|------|----------|
+| 1 | Frozen barrier gradients (computed once per AL outer loop, stale across PD inner iterations) | `pd_solver.rs` | Critical |
+| 2 | Missing barrier Hessian in system matrix A (barrier stiffness not in LHS) | `pd_solver.rs` | Critical |
+| 3 | Broken Armijo line search (uses stale barrier gradients, not true energy-based) | `pd_solver.rs` | High |
+| 4 | Velocity filter removes ALL normal velocity (breaks resting force equilibrium) | `pd_solver.rs` | High |
+| 5 | Dual ground enforcement (IPC velocity filter + `enforce_ground_velocities()` conflict) | `pd_solver.rs` | Medium |
+| 6 | Hard position projections in `resolve()` methods override solver work | `ground_plane.rs`, `sphere.rs` | Medium |
+| 7 | Weak AL parameters (μ₀=1.0, only 5 iterations, tolerance 1e-3) | `config.rs` | High |
+| 8 | Constant `d_clamped=1e-4` for penetration recovery (no depth scaling) | `ground_plane.rs`, `sphere.rs` | Medium |
+| 9 | No AL multiplier (λ) accumulation (pure penalty, not true AL) | `pd_solver.rs` | Medium |
+| 10 | Unused variables (chebyshev, rho, inv_dt2, prev_energy) | `pd_solver.rs` | Low |
+| 11 | `enforce_ground()` hard clamp conflicts with IPC | `state.rs` | Medium |
+| 12 | Prediction clamps `pred_y` above ground (pre-filtering barrier activation) | `state.rs` | Medium |
+| 13 | d_hat convention ambiguity (squared-distance vs distance) | `barrier.rs`, colliders | Medium |
+
+Full analysis documented in artifact: `implementation_plan.md`.
+
+### 2. Code Changes Attempted
+
+#### Fix A: Move `detect_contacts()` Inside Inner PD Loop
+
+**Rationale:** Barrier gradients were frozen per AL iteration. Model suggests per-PD-iteration updates would track position changes.
+**Result: CATASTROPHIC FAILURE.** Solver diverged immediately. PD requires a constant RHS during the inner loop because the system matrix A is prefactored and fixed. Changing the RHS every iteration makes the solver chase a moving target. Also caused 15× performance regression (150 contact detections/frame vs 10).
+**Status: Reverted.**
+
+#### Fix B: Remove `enforce_ground_velocities()` from IPC Path
+
+**Rationale:** Conflicting friction model (50% tangential damping) fighting the Coulomb friction in the velocity filter.
+**Result:** Tested in combination with other fixes. Alone, no visible improvement. Restored for safety.
+**Status: Currently active (restored).**
+
+#### Fix C: Velocity Filter — Only Remove Inward Normal Velocity
+
+**Rationale:** Removing ALL normal velocity (including outward) broke the implicit force equilibrium, causing hovering.
+**Result: MADE BOUNCING WORSE.** The barrier is purely elastic — it stores energy and pushes positions outward, creating outward velocity. If we preserve this outward velocity, the cloth bounces elastically. The original "remove ALL normal velocity" approach was correct for inelastic contacts.
+**Status: Reverted to removing ALL normal velocity.**
+
+#### Fix D: Increase AL Parameters (μ₀=1e3, iters=10, tol=1e-4)
+
+**Rationale:** With μ₀=1.0 and only 5 AL iterations, barrier forces might be too weak.
+**Result:** μ₀=1e3 caused explosion because κ is already adaptively estimated to balance gravity. Multiplying by μ=1e3 made barriers 1000× stronger than gravity. **Reverted μ₀ to 1.0.** Kept `al_max_iterations=10` and `al_tolerance=1e-4`.
+**Status: Partially active (iters=10, tol=1e-4; μ₀ reverted to 1.0).**
+
+#### Fix E: Depth-Proportional Penetration Recovery
+
+**Rationale:** Constant `d_clamped=1e-4` gave same force regardless of penetration depth.
+**Result:** Changed to `(-d_surface).max(1e-6)`. No obvious visual impact in isolation.
+**Status: Currently active.**
+
+#### Fix F: Violation Reporting in Colliders
+
+**Rationale:** Diagnostic data showed `max_violation=0.0` for ALL frames including contact — AL loop never grew μ because only penetrating vertices (d_surface ≤ 0) counted as violations. Barrier-zone vertices (0 < d_surface < √d_hat) were invisible to the AL loop.
+**Result:** Ground/sphere now report barrier-zone proximity as violation: `max_violation = max(d_hat_sqrt - d_surface)`. This gives the AL loop a meaningful signal to grow μ.
+**Status: Currently active.**
+
+#### Fix G: CFL Velocity Clamping
+
+**Rationale:** Diagnostic data proved vertices were overshooting the entire barrier zone in one frame (v×dt=0.043m > √d_hat=0.032m). Added pre-prediction velocity clamp: `max_vel = 0.5 × √d_hat / dt`.
+**Result:** Debug benchmark showed dramatic improvement — KE stable at ~0.5 (no explosion), barrier consistently detecting contacts, AL spending 20-30 iterations. However, **release viewer still showed explosion** — suggesting the velocity clamp alone is insufficient or interacts differently in the viewer's collision pipeline setup.
+**Status: Currently active.**
+
+### 3. Diagnostic Instrumentation & Data
+
+Added `#[cfg(debug_assertions)]` guarded logging to `pd_solver.rs` and `sphere.rs`:
+
+**Per-AL-iteration (inside outer loop):**
+
+```
+AL[{iter}] mu={mu} violation={max_violation} contacts={n} max_speed={v} KE={ke}
+```
+
+**Per-frame (after velocity filter):**
+
+```
+FRAME: KE={ke} y=[{min_y},{max_y}] max_speed={v} al_converged={bool} iters={n}
+```
+
+**Per-sphere-detection (inside detect_ipc_contacts):**
+
+```
+SPHERE: d_hat={d_hat} kappa={kappa} min_d_surface={d} min_d²={d²} d_surface<√d_hat={bool}
+```
+
+#### Key Data Points (Debug Benchmark, 180 Frames, Without Velocity Clamp)
+
+| Frame | KE | y-range | max_speed | contacts | violation | AL iters |
+|-------|-----|---------|-----------|----------|-----------|----------|
+| 1-24 | 0.006 → 1.48 | 0.997 → 0.351 | 0.16 → 2.57 | 0 | 0.00 | 2 |
+| 25 (first contact) | 1.053 | 0.325, 0.535 | **11.02** | 0 | 0.00 | 10 |
+| 26-40 | 0.22 → 0.11 | settling | 1.3-1.7 | 0 | 0.00 | 10 |
+
+**Critical observations:**
+
+- `contacts=0` and `violation=0.00e0` for ALL frames — the barrier system reported zero contacts even during obvious collision
+- Frame 25 shows a 4.3× speed spike (2.57 → 11.02 m/s) — the cloth overshooting the barrier zone in one frame
+- min_d_surface went from 0.051m to 0.007m in one frame (0.044m displacement vs 0.032m barrier zone)
+- Sphere detection confirmed: `d_hat=0.002, kappa=16443.9, min_d_surface=0.007, d_surface<√d_hat=true` — only one frame of visibility
+
+#### Key Data Points (Debug Benchmark, With Velocity Clamp)
+
+| Frame | KE | y-range | max_speed | contacts | AL iters |
+|-------|-----|---------|-----------|----------|----------|
+| 1-10 | 0.006 → 0.484 | 0.997 → 0.843 | 0.16 → 1.47 | 0 | 2 |
+| 11-28 | 0.510 (clamped) | 0.818 → 0.414 | **1.505** (stable) | 0 | 2 |
+| 29 (first contact) | 0.486 | 0.341, 0.347 | 1.496 | detected | 20 |
+| 30-40 | 0.21 → 0.07 | settling/oscillating | 1.0-1.7 | intermittent | 10-30 |
+
+**Velocity clamping improved the debug benchmark but did not fix the viewer.**
+
+### 4. Root Cause Analysis
+
+The instability is driven by a cascade of interacting problems:
+
+#### Primary Cause: Barrier Zone Overshoot
+
+With `barrier_d_hat=0.001` (activation distance √0.001 ≈ 0.032m) and free-fall contact speed v≈2.6 m/s at dt=1/60, the cloth moves 0.043m/frame — **completely overshooting the barrier zone in a single frame.** The barrier only sees the vertex for one detection pass, producing a single massive impulse instead of a gradual deceleration.
+
+Increasing d_hat to 0.01 caused explosion because `estimate_initial_kappa()` scales with d_hat, producing forces 1000× too strong.
+
+#### Secondary Cause: Frozen Barrier Gradients + Fixed System Matrix
+
+The PD solver uses a constant system matrix A (prefactored Cholesky). Barrier forces are only applied as RHS modifications. This means the solver has no information about barrier stiffness in its LHS, causing it to overshoot barrier boundaries during the position update. The CCD step limit partially mitigates this but doesn't prevent the position-level oscillation within the barrier zone.
+
+#### Tertiary Cause: AL Loop Convergence Failure
+
+The AL loop converged immediately at μ=1.0 for most frames because `max_violation` was always 0 (only counting penetrating vertices). Even after fixing violation reporting, the AL loop doesn't grow μ fast enough to prevent the next frame from overshooting.
+
+#### Quaternary Cause: Elastic Barrier Energy
+
+IPC barriers are purely elastic — they store energy as potential and return it as kinetic. The velocity filter removes normal velocity AFTER the position solve, but the positions have already been displaced outward. This creates a position-level oscillation that the velocity filter cannot dampen.
+
+### 5. Current Code State
+
+**Files modified from the pre-session baseline:**
+
+| File | Changes Active |
+|------|---------------|
+| `pd_solver.rs` | CFL velocity clamp (pre-prediction), diagnostic logging (#[cfg(debug_assertions)]), velocity filter removes ALL normal velocity, `enforce_ground_velocities()` restored |
+| `config.rs` | `al_max_iterations: 10`, `al_tolerance: 1e-4` (from 5 and 1e-3) |
+| `ground_plane.rs` | Depth-proportional penetration recovery, barrier-zone violation reporting |
+| `sphere.rs` | Depth-proportional penetration recovery, barrier-zone violation reporting, debug distance logging |
+
+All tests pass: `cargo test --workspace` — 170 passed, 0 failed.
+
+### 6. Structured Plan for Future Investigation
+
+#### Phase A: Substepping (Highest Priority)
+
+The fundamental problem is that `dt=1/60` is too large for the barrier zone size. Rather than increasing d_hat (which breaks κ estimation), implement **adaptive substepping**: when CCD detects that the maximum step would overshoot 50% of d_hat, automatically subdivide the timestep into 2-4 substeps. This maintains the correct physics scaling while giving barriers multiple frames to decelerate cloth.
+
+#### Phase B: Barrier Hessian Proxy in System Matrix
+
+The constant system matrix A has no contribution from barrier stiffness. When a vertex enters the barrier zone, the LHS doesn't know about the sudden stiffness increase, causing overshoot. Adding a diagonal Hessian proxy to the Cholesky prefactor (re-factoring A when contact topology changes) would dramatically improve solver conditioning near contact.
+
+#### Phase C: Position-Level Damping
+
+The velocity filter operates on velocities derived from the final positions. Adding position-level damping or a "sticky" position constraint within the barrier zone (blending the solved position with the previous frame's position when in contact) could prevent the elastic rebound at the position level.
+
+#### Phase D: κ Estimation Decoupling from d_hat
+
+The `estimate_initial_kappa()` function ties κ directly to d_hat, making barrier forces explosive for large d_hat values. Decoupling κ estimation from d_hat (e.g., estimating based on maximum expected contact velocity rather than barrier zone size) would allow larger barrier zones without force explosions.
+
+#### Phase E: True Augmented Lagrangian with λ Accumulation
+
+The current "AL" loop is actually a pure penalty method (no λ multiplier accumulation). Implementing true AL with accumulated Lagrange multipliers would provide faster convergence and better constraint satisfaction without needing extremely large μ values.
+
+### Issues & Decisions
+
+- **Decision:** Stopped implementing incremental code fixes. The problem requires a more fundamental architectural change (substepping or barrier Hessian integration) rather than parameter tuning.
+- **Issue:** Debug benchmark results (stable) differ from release viewer results (explosion). This may be caused by different collision pipeline configurations between the benchmark runner and the Bevy viewer, or by timing differences (debug build runs slower, effectively sub-stepping).
+- **Observation:** The diagnostic instrumentation (`#[cfg(debug_assertions)]`) is currently active in the codebase and should remain for future debugging sessions. It has zero cost in release builds.
+
+### Next Steps
+
+- [ ] **Investigate the benchmark-vs-viewer discrepancy** — compare collision pipeline setup in `runner.rs` vs `lib.rs` (viewer) to ensure identical configurations
+- [ ] **Implement adaptive substepping** as the highest-priority fix for barrier zone overshoot
+- [ ] **Profile the release build** to determine if the viewer's frame timing creates a different effective dt
+- [ ] **Consider increasing dt to 1/120 or 1/240** as a quick test to validate the substepping hypothesis
+- [ ] **Clean up diagnostic logging** — ensure all `#[cfg(debug_assertions)]` blocks are clearly marked as temporary
+
+## 2026-03-05 (Update: Simulation Stabilization and Resting Anomalies)
+
+### Current State
+
+**Tier 4 — Stabilization Phase (Stable, but with Kinetic Anomalies).**
+The stability of the simulation has improved significantly. The catastrophic `NaN` explosions and the severe "chewing gum" stretching issues upon object contact have been completely eliminated. When the fabric slides along the floor, it no longer continues bouncing infinitely and successfully settles into a grounded rest state.
+
+However, the initial collision behavior remains physically unnatural. When the fabric drops and makes initial contact with the sphere, it bounces, exhibits a curved, somewhat rigid deformation, and performs several smaller bounces before eventually settling. Real cloth should immediately conform and drape upon impact without this pronounced elastic rebound. Feature development remains paused while we investigate these initial impact dynamics.
+
+### Progress
+
+- **Physics Fix 1 (True Augmented Lagrangian):** Implemented warm-starting for the Augmented Lagrangian (AL) solver by persisting Lagrange multipliers (`lambda`) across frames in `SimulationState`. The cloth now remembers the exact forces required to stay supported against gravity, preventing the violent initial catapulting caused by starting the solver from zero knowledge every frame.
+- **Physics Fix 2 (Stale Multiplier Levitation):** Resolved an issue where vertices that detached from colliders retained their massive upward `lambda` forces, causing the cloth to float. The AL loop now strictly zeroes out `lambda` the instant a vertex breaks contact.
+- **Physics Fix 3 (The `NaN` Bomb / Exponential Penalty Growth):** Fixed a critical flaw in `sphere.rs` and `ground_plane.rs` where resting proximity (within the barrier zone) was incorrectly reported identically to a physical constraint failure. The AL loop now only registers a `max_violation` upon strict penetration ($d \le 0.0$), halting the exponential cascade of the penalty parameter $\mu$ that was blowing up the system.
+- **Physics Fix 4 (Barrier Scaling):** Corrected the mathematical initialization of $\kappa$ in `barrier.rs`, which was previously determining stiffness 44x too high by scaling against $\hat{d}$ rather than $2\sqrt{d_{mid}}$.
+
+### Key Observations
+
+- **Numeric vs. Kinetic Stability:** The underlying AL/IPC mathematics are now numerically robust. The solver achieves a stable resting state without generating endless energy or forcing the system into `NaN` divergence.
+- **The Initial Impact Anomaly:** The current anomaly is localized specifically to the *initial impact phase*. The fabric behaves highly elastically rather than plastically upon hitting the collision geometry, retaining its curved shape temporarily instead of instantaneously buckling and wrapping around the sphere.
+
+### Issues & Decisions
+
+- **Issue (Curved Deformation and Bouncing):** The fabric bounces structurally upon contact and takes too long to conform to the collider.
+- **Decision:** Do not modify the core AL/IPC math further, as it has proven numerically stable. The issue is likely a conflict between the implicit fabric stiffness parameters (bending/membrane) and the kinetic energy dissipation during the explicit impact moment.
+- **Note:** The cloth may be lacking sufficient internal damping, or the barrier zone $\hat{d}$ might be too forcefully repelling high-velocity impacts before the inner solver can dissipate energy through bending.
+
+### Next Steps
+
+- [ ] **Investigate Energy Dissipation:** Analyze how kinetic energy is, or isn't, being dissipated at the exact moment of initial impact.
+- [ ] **Review Material Properties:** Evaluate the stiffness coefficients (stretch vs. bending) to see if the fabric is artificially rigid, preventing it from conforming naturally.
+- [ ] **Tune Collision Tuning:** Investigate if the $\kappa$ ramp-up is too aggressive at high speeds, acting like a stiff trampoline before the cloth can buckle.
+- [ ] Conduct targeted testing isolating the drop velocity vs. the resulting bounce height to profile the elasticity of the barrier.
+
 <!-- TEMPLATE: Copy the block below for each new day -->
 
 <!--
